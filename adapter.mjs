@@ -50,10 +50,10 @@ export class ChatuAdapter {
       reference:{comfyui:false,banana:false},cache:'SillyTavern 服务器',
       conflicts:Object.entries(s).filter(([k,v])=>/auto.*click|pre.*generat|stream.*generat/i.test(k)&&(v===true||v==='true')).map(([k])=>k)};
   }
-  snapshot(backend='follow'){
+  snapshot(backend='follow',workflowId){
     const s=this.settings();backend=backend==='follow'?this.capabilities().current:backend;
     if(!this.capabilities()[backend])throw new Error('此后端未配置或接口尚未适配');
-    const paired=backend==='comfyui'?pairedWorkflow(this.context().extensionSettings[NS]):null;
+    const paired=backend==='comfyui'?pairedWorkflow(workflowId?{comfyWorkflow:workflowId}:this.context().extensionSettings[NS]):null;
     const p=backend==='comfyui'?(s.yushe?.[s.yusheid_comfyui]||(paired?{}:null)):s.banana.conversationPresets?.[s.banana.conversationPresetId];
     if(!p)throw new Error('智绘姬固定提示词预设不存在');
     const data=backend==='comfyui'?{
@@ -154,5 +154,50 @@ export class ChatuAdapter {
     if(!s.characterPresets[id]){s.characterPresets[id]={nameCN:name,nameEN:'',characterTraits:traits,facialFeatures:'',outfits:[],photoMedia:[],audioMedia:[],directorOwner:owner,directorScope:scope};this.context().saveSettingsDebounced();}
     return id;
   }
-  openProfiles(){globalThis.showChatuSettingsPanel?.();}
+  profile(id){return this.settings().characterPresets?.[id]||null;}
+  outfitsForProfile(profileId){
+    const s=this.settings(),profile=s.characterPresets?.[profileId];
+    return (profile?.outfits||[]).map(id=>({id,preset:s.outfitPresets?.[id]})).filter(x=>x.preset).map(({id,preset})=>({
+      id,nameCN:preset.nameCN||'',nameEN:preset.nameEN||'',description:preset.fullBody||preset.upperBody||'',directorOwner:preset.directorOwner||''
+    }));
+  }
+  upsertOutfit(owner,profileId,characterName,description,scope=''){
+    const profile=this.profile(profileId);
+    if(!profile)throw new Error('人物档案不存在，无法关联服装');
+    const value=String(description||'').trim().replace(/\s+/g,' ');
+    if(value.length<3||value.length>180||/[^\x20-\x7e]/.test(value)||/^(unknown|unspecified|none|not specified|n\/a)$/i.test(value))return null;
+    const normalized=value.toLowerCase();
+    const tokens=text=>new Set(String(text||'').toLowerCase().match(/[a-z0-9]+/g)||[]);
+    const incoming=tokens(value);
+    const same=text=>{
+      const other=String(text||'').trim().replace(/\s+/g,' ').toLowerCase();
+      if(other===normalized)return true;
+      const known=tokens(other),union=new Set([...incoming,...known]);
+      return incoming.size>=2&&known.size>=2&&[...incoming].filter(word=>known.has(word)).length/union.size>=0.9;
+    };
+    const existing=this.outfitsForProfile(profileId).find(x=>[x.nameEN,x.description].some(same));
+    if(existing)return existing.id;
+    const s=this.settings();s.outfitPresets ||= {};profile.outfits ||= [];
+    const id=`nd_outfit_${owner}_${fingerprint(normalized)}`;
+    if(s.outfitPresets[id]){
+      if(s.outfitPresets[id].directorOwner!==owner)throw new Error('服装 ID 冲突，已停止写入');
+    }else{
+      s.outfitPresets[id]={nameCN:`${characterName} - 导演服装 ${profile.outfits.length+1}`,nameEN:'',owner:profile.nameEN||characterName,
+        upperBody:value,upperBodyBack:'',fullBody:value,fullBodyBack:'',photoImageIds:[],selectedPhotoIndex:0,photoPrompt:'',sendPhoto:false,
+        directorOwner:owner,directorScope:scope,directorGeneratedDescription:value};
+    }
+    if(!profile.outfits.includes(id))profile.outfits.push(id);
+    this.context().saveSettingsDebounced();return id;
+  }
+  syncOwnedFacts(id,owner,facts){
+    const p=this.profile(id);if(!p||p.directorOwner!==owner)return {updated:false,reason:'existing'};
+    const previous=p.directorGeneratedTraits;
+    if(previous!==undefined&&p.characterTraits!==previous)return {updated:false,reason:'user-edited'};
+    if(previous===undefined&&p.characterTraits)return {updated:false,reason:'untracked'};
+    p.directorFacts ||= {};
+    for(const f of facts)if(!p.directorFacts[f.field])p.directorFacts[f.field]={...f};
+    p.characterTraits=Object.values(p.directorFacts).map(f=>`${f.field.replaceAll('_',' ')}: ${f.value}`).join('; ');
+    p.directorGeneratedTraits=p.characterTraits;this.context().saveSettingsDebounced();return {updated:true};
+  }
+  openProfiles(){if(typeof globalThis.showChatuSettingsPanel!=='function')throw new Error('智绘姬管理入口尚未加载，请先检查原版扩展');globalThis.showChatuSettingsPanel();}
 }

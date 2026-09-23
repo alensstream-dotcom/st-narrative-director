@@ -21,10 +21,15 @@ test('manual male allowed but automatic rejected',()=>{
   const s=scene();s.cast[0].gender='male';assert.equal(validateScene(s,raw,{start:0,end:raw.length},false),null);assert.ok(validateScene(s,raw,{start:0,end:raw.length},true));
 });
 test('uncompleted action never accepted',()=>{const s=scene();s.phase='planned';assert.throws(()=>validateScene(s,raw,{start:0,end:raw.length},true));});
+test('director negative cannot suppress a required visible prop',()=>{const s=scene();s.negative='text, camera not visible, missing camera, watermark';const checked=validateScene(s,raw,{start:0,end:raw.length},true);assert.equal(checked.negative,'text, watermark');});
 test('environment cannot disguise male as subject',()=>{const s=scene();s.subject='environment';s.cast[0].gender='male';assert.equal(validateScene(s,raw,{start:0,end:raw.length}),null);s.cast[0].is_subject=false;assert.ok(validateScene(s,raw,{start:0,end:raw.length}));});
 test('budget duplicates and reserved second',()=>{
   const b=new AutoBudget();const s={event_key:'hug',anchor:{start:0,end:10},score:.9};assert.ok(b.accept(s));assert.equal(b.accept(s,true),false);
   const s2={event_key:'battle',anchor:{start:30,end:50},score:.9};assert.equal(b.accept(s2),false);assert.ok(b.accept(s2,true));assert.equal(b.accept({...s2,event_key:'third'},true),false);
+});
+test('automatic second shot never backfills an earlier moment',()=>{
+  const b=new AutoBudget(),late={event_key:'camera',anchor:{start:42,end:120},score:.9},early={event_key:'changing-room',anchor:{start:0,end:42},score:.8};
+  assert.ok(b.accept(late));assert.equal(b.canAccept(early,true),false);assert.equal(b.accept(early,true),false);
 });
 test('terminal states reject late completion',()=>{
   const t=new Task({binding:{},scene:{},origin:'manual'});t.set('cancelled');assert.equal(t.set('done'),false);assert.equal(t.state,'cancelled');
