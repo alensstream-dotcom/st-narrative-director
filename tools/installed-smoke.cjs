@@ -1,13 +1,28 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
 (async()=>{
+  if((process.argv.includes('--profile-roundtrip')||process.argv.includes('--render'))&&process.env.DIRECTOR_TEST_ISOLATED!=='1'){
+    throw new Error('Write/render acceptance checks require DIRECTOR_TEST_ISOLATED=1 and an isolated SillyTavern instance');
+  }
   const browser=await chromium.launch({channel:'msedge',headless:true});
   try{
     const page=await browser.newPage({viewport:{width:430,height:900}});
-    const errors=[];page.on('pageerror',e=>{if(e.stack?.includes('st-narrative-director'))errors.push(e.message);});
-    await page.goto('http://localhost:11451/',{waitUntil:'domcontentloaded'});
+    const errors=[];let pageErrorCount=0;page.on('pageerror',e=>{pageErrorCount++;if(e.stack?.includes('st-narrative-director'))errors.push(e.message);});
+    page.on('request',r=>{if(r.url().endsWith('/api/settings/save'))console.log('SETTINGS_REQUEST',r.method());});
+    page.on('response',r=>{if(r.url().endsWith('/api/settings/save'))console.log('SETTINGS_RESPONSE',r.status());});
+    page.on('console',m=>{if(/Settings not ready/i.test(m.text()))console.log('SETTINGS_NOT_READY');else if(/Error saving settings/i.test(m.text()))console.log('SETTINGS_SAVE_ERROR');});
+    const base=process.env.DIRECTOR_ST_URL||'http://localhost:11451';
+    await page.goto(base,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')],null,{timeout:90000});
-    await page.waitForFunction(async()=>(await import('/script.js')).settingsReady,null,{timeout:90000});
+    const readiness=await page.evaluate(async()=>{
+      const module=await import('/script.js');
+      return {ready:module.settingsReady};
+    });
+    console.log(JSON.stringify({readiness,pageErrorCount}));
+    if(process.argv.includes('--profile-roundtrip')&&!readiness.ready){
+      await page.screenshot({path:'artifacts/installed-not-ready.png'});
+      throw new Error('SillyTavern settings are not ready; cannot verify persistence');
+    }
     await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].ui.settings());
     await page.getByRole('button',{name:'使用正文连接的独立副本',exact:true}).waitFor();
     if(process.argv.includes('--configure-krill')){
@@ -36,9 +51,47 @@ const assert=require('node:assert/strict');
     }
     const result=await page.evaluate(()=>{
       const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,config=c.config(),d=document.querySelector('.nd-dialog');
-      return {loaded:true,source:config.source,model:config.model,secretConfigured:!!config.secretId,autoEnabled:config.enabled,snapshot:c.adapter.snapshot('comfyui'),horizontalOverflow:d.scrollWidth>d.clientWidth+1};
+      let chatuAvailable=false;try{chatuAvailable=!!c.adapter.settings();}catch{}
+      return {loaded:true,source:config.source,model:config.model,secretConfigured:!!config.secretId,autoEnabled:config.enabled,chatuAvailable,snapshot:c.adapter.snapshot('comfyui'),horizontalOverflow:d.scrollWidth>d.clientWidth+1};
     });
     assert.equal(result.horizontalOverflow,false);assert.equal(errors.length,0);
+    if(process.argv.includes('--require-chatu'))assert.ok(result.chatuAvailable,'Original Chatu integration is not available');
+    if(process.argv.includes('--profile-roundtrip')){
+      const owner=`acceptance_${Date.now()}`;
+      const saved=page.waitForResponse(r=>r.url().endsWith('/api/settings/save')&&r.request().method()==='POST',{timeout:90000});
+      const created=await page.evaluate(owner=>{
+        const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,s=c.adapter.settings();
+        const enabledBefore=JSON.stringify([s.characterEnablePresets,s.characterCommonPresets]);
+        const profile=c.adapter.upsertProfile(owner,'验收测试艾琳','silver hair, green eyes',undefined,'acceptance');
+        const outfit=c.adapter.upsertOutfit(owner,profile,'验收测试艾琳','black coat','acceptance','coat','generic');
+        return {profile,outfit,enabledBefore};
+      },owner);
+      console.log(JSON.stringify({createdProfile:created.profile,createdOutfit:created.outfit}));
+      assert.ok((await saved).ok(),'Chatu profile save failed');
+      await page.reload({waitUntil:'domcontentloaded'});
+      await page.waitForFunction(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')],null,{timeout:90000});
+      const persisted=await page.evaluate(({profile,outfit,enabledBefore})=>{
+        const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,s=c.adapter.settings();
+        return {profilePresent:!!s.characterPresets?.[profile],outfitPresent:!!s.outfitPresets?.[outfit],
+          linked:s.characterPresets?.[profile]?.outfits?.includes(outfit),globalEnabledUnchanged:enabledBefore===JSON.stringify([s.characterEnablePresets,s.characterCommonPresets])};
+      },created);
+      assert.deepEqual(persisted,{profilePresent:true,outfitPresent:true,linked:true,globalEnabledUnchanged:true});
+      console.log(JSON.stringify({profileRoundtrip:persisted}));
+    }
+    if(process.argv.includes('--render')){
+      const generated=await page.evaluate(async()=>{
+        const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,start=Date.now();
+        await c.adapter.inspectComfy();
+        const snapshot=c.adapter.snapshot('comfyui');
+        const image=await c.adapter.generate(snapshot,{id:`acceptance_image_${Date.now()}`,
+          positive:'masterpiece, best quality, anime illustration, one adult woman with silver hair and green eyes, black coat, standing in a station hall, complete face visible, front view, medium shot',
+          negative:'text, watermark, speech bubble, cropped face, back view'});
+        return {path:image.image,model:image.params.model,workflow:image.params.workflow,ms:Date.now()-start};
+      });
+      const image=await page.request.get(new URL(generated.path,base).toString());
+      assert.ok(image.ok()&&image.headers()['content-type']?.startsWith('image/'),'Generated image was not saved to the SillyTavern server');
+      console.log(JSON.stringify({render:generated,savedImage:true}));
+    }
     await page.screenshot({path:'artifacts/installed-settings.png'});
     console.log(JSON.stringify({installed:result,pluginErrors:errors}));
   }finally{await browser.close();}
