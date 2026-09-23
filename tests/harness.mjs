@@ -3,10 +3,14 @@ const token=await(await fetch('/csrf-token')).json();
 const headers={'Content-Type':'application/json','X-CSRF-Token':token.token};
 const post=async(path,body)=>(await fetch(path,{method:'POST',headers,body:JSON.stringify(body)})).json();
 const response=await post('/api/settings/get',{}),settings=typeof response.settings==='string'?JSON.parse(response.settings):response.settings;
+settings.extension_settings ||= {};
+settings.extension_settings['st-chatu8'] ||= {mode:'comfyui',comfyuiUrl:'http://127.0.0.1:8188',characterPresets:{},outfitPresets:{},
+ yusheid_comfyui:'test',yushe:{test:{fixedPrompt:'masterpiece, best quality, score_7, anime illustration',fixedPrompt_end:'',negativePrompt:'worst quality, low quality, blurry, text, watermark'}}};
 const secrets=await post('/api/secrets/read',{});
 const completion=settings.oai_settings||{},source=completion.chat_completion_source||'deepseek';
 const name=source==='deepseek'?'api_key_deepseek':source==='custom'?'api_key_custom':'api_key_openai';
-settings.extension_settings[NS]={enabled:false,source,model:source==='deepseek'?completion.deepseek_model:source==='custom'?completion.custom_model:completion.openai_model,
+const savedDirector=new URLSearchParams(location.search).has('savedDirector')&&settings.extension_settings[NS]?.secretId;
+settings.extension_settings[NS]=savedDirector?{...settings.extension_settings[NS],enabled:false,scopes:{}}:{enabled:false,source,model:source==='deepseek'?completion.deepseek_model:source==='custom'?completion.custom_model:completion.openai_model,
  secretId:(secrets[name]||[]).find(s=>s.active)?.id||'',url:completion.custom_url||'',autoBackend:'comfyui',manualBackend:'comfyui',scopes:{}};
 const events=new Map(),types=Object.fromEntries(['GENERATION_STARTED','STREAM_TOKEN_RECEIVED','GENERATION_ENDED','CHAT_CHANGED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_EDITED','CHARACTER_MESSAGE_RENDERED','MESSAGE_UPDATED','MESSAGE_RECEIVED'].map(n=>[n,n]));
 const description='艾琳是二十五岁的女性，银色及肩短发，绿色眼睛，左眼下有一颗小痣。她是一名旅行摄影师。';

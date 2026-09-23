@@ -91,7 +91,7 @@ function taskPanel(ui,body){
 function characterPanel(ui,body,d){
   const c=ui.c,registry=c.scope().characters;body.replaceChildren();
   const status=el('p',{class:'nd-status',role:'status'});
-  body.append(el('div',{class:'nd-actions-inline'},command('user-gear','打开智绘姬人物与服装管理',()=>{try{c.adapter.openProfiles();d.close();}catch(e){status.textContent=e.message;}},'智绘姬管理'),command('arrows-rotate','重新读取人物资料',()=>characterPanel(ui,body,d),'刷新'),el('a',{href:'https://animadex.net/?mode=characters',target:'_blank',rel:'noopener noreferrer',text:'ANIMADEX Tag'})),status);
+  body.append(el('div',{class:'nd-actions-inline'},command('user-gear','打开智绘姬人物与服装管理',()=>{try{c.adapter.openProfiles();d.close();}catch(e){status.textContent=e.message;}},'智绘姬管理'),command('arrows-rotate','重新读取人物资料',()=>characterPanel(ui,body,d),'刷新'),el('a',{href:'https://animadex.net/?mode=characters',target:'_blank',rel:'noopener noreferrer',text:'人物 Tag'}),el('a',{href:'https://tags.latent.moe/en/g/fashion_style',target:'_blank',rel:'noopener noreferrer',text:'服装 Tag'})),status);
   let profiles;try{profiles=c.adapter.profiles();}catch(e){status.textContent=e.message;return;}
   body.append(el('p',{class:'nd-status',text:`当前聊天 ${Object.keys(registry).length} 人 · 智绘姬 ${profiles.length} 份档案`}));
   if(!Object.keys(registry).length)body.append(el('p',{class:'nd-notice',text:'当前聊天尚未识别人物。首次分析剧情时自动关联或建立档案。'}));

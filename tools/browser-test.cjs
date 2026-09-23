@@ -4,10 +4,11 @@ const path=require('node:path');
 (async()=>{
  const browser=await chromium.launch({channel:'msedge',headless:true});
  try{
+ const base=(process.env.DIRECTOR_ST_URL||'http://localhost:11451').replace(/\/$/,'');
  const page=await browser.newPage({viewport:{width:process.argv.includes('--desktop')?1280:430,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const cdp=await browser.newBrowserCDPSession();
  const {browserContextIds}=await cdp.send('Target.getBrowserContexts');
- if(!process.argv.includes('--proxy'))for(const name of ['local-network-access','loopback-network','local-network'])await cdp.send('Browser.setPermission',{permission:{name},setting:'granted',origin:'http://localhost:11451',browserContextId:browserContextIds[0]});
+ if(!process.argv.includes('--proxy'))for(const name of ['local-network-access','loopback-network','local-network'])await cdp.send('Browser.setPermission',{permission:{name},setting:'granted',origin:base,browserContextId:browserContextIds[0]});
  page.on('console',m=>{if(m.type()==='error')console.log('BROWSER_ERROR '+m.text().slice(0,500));});
  await page.route('**/scripts/extensions/third-party/st-narrative-director/**',route=>{
    const prefix='/scripts/extensions/third-party/st-narrative-director/';
@@ -16,8 +17,12 @@ const path=require('node:path');
    if(!file.startsWith(root+path.sep)||!fs.existsSync(file))return route.fulfill({status:404,body:'Not found'});
    return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.html')?'text/html':file.endsWith('.css')?'text/css':'text/javascript'});
  });
- await page.goto('http://localhost:11451/scripts/extensions/third-party/st-narrative-director/tests/harness.html');
+ await page.goto(base+'/scripts/extensions/third-party/st-narrative-director/tests/harness.html'+(process.argv.includes('--saved-director')?'?savedDirector=1':''));
  await page.waitForFunction(()=>window.testHarness?.ready,null,{timeout:60000});
+ if(process.argv.includes('--session-director')){
+   const key=process.env.DIRECTOR_API_KEY;if(!key)throw new Error('DIRECTOR_API_KEY is required only for the isolated session');
+   await page.evaluate(key=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,config=c.config();config.source='custom';config.url='https://api-slb.krill-code.net/v1';config.model='gpt-6-sol';config.autoBackend='comfyui';config.manualBackend='comfyui';c.api.setSessionKey(key);},key);
+ }
  const inspect=await page.evaluate(()=>{const d=globalThis[Symbol.for('st.narrative-director.debug.v1')],c=d.controller;return {source:c.config().source,model:c.config().model,secretPresent:!!c.config().secretId,caps:c.adapter.capabilities(),snapshot:c.adapter.snapshot('comfyui')};});
  console.log(JSON.stringify({inspect,errors}));
  console.log(JSON.stringify(await page.evaluate(async()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;const url=c.adapter.settings().comfyuiUrl;try{const r=await fetch(url+'/system_stats');return {configuredUrl:url,status:r.status,info:!!await c.adapter.inspectComfy()};}catch(e){return {configuredUrl:url,error:e.message};}})));
@@ -27,6 +32,15 @@ const path=require('node:path');
  fs.mkdirSync('artifacts',{recursive:true});await page.screenshot({path:'artifacts/settings-mobile.png',fullPage:true});
  console.log('SCREENSHOT artifacts/settings-mobile.png');
  console.log(JSON.stringify({afterClickErrors:errors}));
+ if(process.argv.includes('--models')){
+   const models=await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.api.models());
+   if(!models.includes('gpt-6-sol'))throw new Error('Selected Sol model missing from live model list');
+   await page.getByRole('button',{name:'刷新可用模型'}).click();
+   await page.getByText(/读取到 \d+ 个模型/).waitFor({timeout:30000});
+   await page.getByRole('combobox',{name:'可用模型'}).selectOption('gpt-6-sol');
+   if(await page.getByRole('textbox',{name:'模型 ID'}).inputValue()!=='gpt-6-sol')throw new Error('Model picker did not update the selected model');
+   console.log(JSON.stringify({phase:'models',models}));
+ }
  if(process.argv.includes('--settings')){
    const mode=page.getByRole('combobox',{name:'密钥来源'}),key=page.getByRole('textbox',{name:'本页独立密钥'});
    await key.fill('intentionally-wrong');
@@ -52,10 +66,52 @@ const path=require('node:path');
    await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,id='ui-outfit-test',profile=c.adapter.upsertProfile(id,'测试人物','');c.scope().characters[id]={id,name:'测试人物',aliases:[],profile,lock:null};c.adapter.upsertOutfit(id,profile,'测试人物','black coat',c.chatKey());});
    await page.getByRole('button',{name:'重新读取人物资料'}).click();
    await page.getByText('智绘姬服装预设 1').waitFor();
-   if(!await page.getByRole('link',{name:'ANIMADEX Tag'}).count())throw new Error('AnimaDex lookup link missing');
+   if(!await page.getByRole('link',{name:'人物 Tag'}).count()||!await page.getByRole('link',{name:'服装 Tag'}).count())throw new Error('Tag lookup links missing');
    if(await page.locator('.nd-dialog').evaluate(d=>d.scrollWidth>d.clientWidth+1))throw new Error('Character manager overflows horizontally');
    await page.screenshot({path:'artifacts/characters-mobile.png',fullPage:true});
    console.log(JSON.stringify({phase:'settings',replaced:true,cleared:true,connectionTested:true,models,profilesVisible:true,errors}));
+ }
+ if(process.argv.includes('--outfits')){
+   const samples=['艾琳换上校服，从教室门口走进来，抬头朝讲台看去。','第二天，艾琳换上深蓝色校服，胸口别着银色徽章，从同一扇教室门走进来。'];
+   for(let i=0;i<samples.length;i++){
+     const result=await page.evaluate(async({story})=>{
+       const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+       window.testHarness.setText(story);
+       const analysis=await c.analyze(0,story,0,story.length,true);
+       const scene=analysis.scenes[0],cast=scene?.cast?.[0];
+       return {analysisMs:scene?.analysisMs,moment:scene?.moment,outfit:cast?.outfit,outfit_class:cast?.outfit_class,outfit_specificity:cast?.outfit_specificity,grounded:cast?.outfit_grounded,prompt:scene?.positive};
+     },{story:samples[i]});
+     console.log(JSON.stringify({phase:'outfit-analysis',effort:'minimal',...result}));
+     if(!result.grounded||result.outfit_specificity!==(i===0?'generic':'specified'))throw new Error('Outfit classification did not follow story evidence');
+     if(/unspecified details|remain open/i.test(result.prompt))throw new Error('Nonvisual outfit meta text reached the prompt');
+   }
+ }
+ if(process.argv.includes('--streamed-analysis')){
+   const result=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+     const {AutoBudget}=await import('../core.mjs');
+     const first='半小时后，艾琳已经穿着黑色长袖外套和黑色长裤，站在车站大厅窗前。她举起银色相机，镜头朝向窗外的站台，按下快门拍了一张照片。';
+     const tail='随后她放下相机，脸微微转向左侧，绿色眼睛望着站台。银色及肩短发被窗边微风拂起。';
+     window.testHarness.setText(first);
+     const initial=await c.analyze(0,first,0,first.length,false);
+     const chosen=initial.scenes[0];if(!chosen)throw new Error('No initial auto scene');
+     const budget=new AutoBudget();budget.accept(chosen);
+     window.testHarness.setText(first+tail);
+     const next=await c.analyze(0,first+tail,first.length,first.length+tail.length,false,undefined,[chosen]);
+     return {firstMoment:chosen.moment,firstMs:chosen.analysisMs,next:next.scenes.map(s=>({moment:s.moment,score:s.score,canAccept:budget.canAccept(s,true)}))};
+   });
+   console.log(JSON.stringify({phase:'streamed-analysis',...result}));
+   if(result.next.some(s=>s.canAccept))throw new Error('Follow-through was incorrectly accepted as a second automatic image');
+ }
+ if(process.argv.includes('--ui')){
+   await page.getByRole('tab',{name:'人物'}).click();
+   await page.getByRole('link',{name:'人物 Tag'}).waitFor();
+   await page.getByRole('link',{name:'服装 Tag'}).waitFor();
+   const overflow=await page.locator('.nd-dialog').evaluate(d=>d.scrollWidth>d.clientWidth+1);
+   if(overflow)throw new Error('Character panel overflows horizontally');
+   const file=process.argv.includes('--desktop')?'artifacts/characters-desktop.png':'artifacts/characters-mobile.png';
+   await page.screenshot({path:file,fullPage:true});
+   console.log(JSON.stringify({phase:'ui',viewport:process.argv.includes('--desktop')?'desktop':'mobile',overflow,errors,screenshot:file}));
  }
  if(process.argv.includes('--redraw')){
    await page.getByRole('button',{name:'关闭',exact:true}).click();
@@ -149,19 +205,26 @@ const path=require('node:path');
    await page.getByRole('button',{name:'锁定形象',exact:true}).click();
    await page.getByRole('button',{name:'锁定固定外貌',exact:true}).click();
    await page.getByRole('button',{name:'关闭',exact:true}).click();
-   const autoText='半小时后，艾琳从车站的更衣室走出来，已经换上黑色长袖外套和黑色长裤，白裙收进旅行箱。她走到大厅窗前，举起银色相机，镜头朝向窗外的站台；脸微微转向左侧，绿色眼睛专注地观察取景。她保持这个姿势，右手食指轻放在快门上，银色及肩短发被窗边微风拂起。';
+   const streamed=process.argv.includes('--streamed');
+   const autoText=streamed?'半小时后，艾琳已经穿着黑色长袖外套和黑色长裤，站在车站大厅窗前。她举起银色相机，镜头朝向窗外的站台，按下快门拍了一张照片。':'半小时后，艾琳从车站的更衣室走出来，已经换上黑色长袖外套和黑色长裤，白裙收进旅行箱。她走到大厅窗前，举起银色相机，镜头朝向窗外的站台；脸微微转向左侧，绿色眼睛专注地观察取景。她保持这个姿势，右手食指轻放在快门上，银色及肩短发被窗边微风拂起。';
    await page.evaluate(text=>{
      const {controller:c}=globalThis[Symbol.for('st.narrative-director.debug.v1')],h=window.testHarness;
      c.config().enabled=true;c.startRound('normal',{},false);h.context.chat.push({mes:text,swipe_id:0,is_user:false,name:'艾琳',extra:{}});h.render();c.onToken(text);
    },autoText);
    await page.waitForFunction(()=>[...globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.tasks.values()].some(t=>t.origin==='automatic'),null,{timeout:110000});
    const early=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;return {submittedBeforeEnd:!c.round.final,tasks:[...c.tasks.values()].filter(t=>t.origin==='automatic').map(t=>({prompt:t.scene.positive,state:t.state}))};});
+   if(streamed){
+     const before=await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.ctx().chat[1].mes);
+     if(before!==autoText||!early.submittedBeforeEnd)throw new Error('Auto task was not submitted while only the first story chunk existed');
+     await page.evaluate(()=>{const {controller:c}=globalThis[Symbol.for('st.narrative-director.debug.v1')],h=window.testHarness;const tail='随后她放下相机，脸微微转向左侧，绿色眼睛望着站台。银色及肩短发被窗边微风拂起。';h.context.chat[1].mes+=tail;h.render();c.onToken(tail);});
+   }
    console.log(JSON.stringify({phase:'automatic-early',...early}));
    await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.endRound());
    await page.waitForFunction(()=>[...globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.tasks.values()].filter(t=>t.origin==='automatic').every(t=>t.terminal),null,{timeout:600000});
    await page.locator('.mes[mesid="1"] .nd-image img').waitFor();await page.locator('.mes[mesid="1"] .nd-image img').evaluate(img=>img.decode());
    await page.screenshot({path:'artifacts/auto-locked-mobile.png',fullPage:true});
    const autoResult=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;return {tasks:[...c.tasks.values()].map(t=>({state:t.state,origin:t.origin,detail:t.detail,nativeId:t.nativeId})),characters:Object.values(c.scope().characters),images:c.ctx().chat[1].extra?.narrative_director_v1?.images};});
+   if(streamed&&(autoResult.tasks.filter(t=>t.origin==='automatic').length!==1||autoResult.images?.length!==1||imageRequests!==2))throw new Error('Streamed reply made duplicate or missing automatic images');
    fs.writeFileSync('artifacts/auto-result.json',JSON.stringify(autoResult,null,2));console.log(JSON.stringify({phase:'automatic-result',...autoResult}));
    await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;c.ctx().chat[1].swipe_id=1;c.invalidate();});
    await page.waitForFunction(()=>!document.querySelector('.mes[mesid="1"] .nd-image'));

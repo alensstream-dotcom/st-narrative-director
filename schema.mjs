@@ -3,7 +3,8 @@ const boolean={type:'boolean'};
 const array=items=>({type:'array',items});
 const object=properties=>({type:'object',properties,required:Object.keys(properties)});
 const fact=object({field:text,value:text,evidence:text,source:text});
-const cast=object({name:text,aliases:array(text),gender:{type:'string',enum:['female','male','unknown']},is_subject:boolean,outfit:text,outfit_evidence:text,position:text,fixed_facts:array(fact)});
+const cast=object({name:text,aliases:array(text),gender:{type:'string',enum:['female','male','unknown']},is_subject:boolean,outfit:text,outfit_evidence:text,
+  outfit_class:text,outfit_specificity:{type:'string',enum:['generic','specified','unknown']},position:text,fixed_facts:array(fact)});
 const scene=object({
   evidence:text,moment:text,event_key:text,phase:{type:'string',enum:['static','happening','completed']},score:{type:'number'},uncertain:boolean,
   subject:{type:'string',enum:['characters','environment']},cast:array(cast),

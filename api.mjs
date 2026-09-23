@@ -49,6 +49,7 @@ export class DirectorAPI {
         const timeout=AbortSignal.timeout(90000);
         const result=await this.post('/api/backends/chat-completions/generate',{
           ...connection,stream:false,temperature:0.2,max_tokens:3200,
+          ...(/^gpt-6-(?:sol|astra|luna)$/i.test(connection.model)?{reasoning_effort:'minimal'}:{}),
           messages:[{role:'system',content:DIRECTOR_SYSTEM},{role:'user',content:JSON.stringify(input)}],
           json_schema:{name:'scene_director',strict:false,value:DIRECTOR_SCHEMA}
         },signal ? AbortSignal.any([signal,timeout]) : timeout);

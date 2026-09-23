@@ -76,6 +76,21 @@ test('outfit presets are linked only to the matching profile and never alter glo
   const changed=c.adapter.upsertOutfit('a',a,'艾琳','red battle suit',c.chatKey());
   assert.notEqual(changed,first);assert.equal(s.outfitPresets[first].fullBody,'user edited navy coat');
 });
+test('generic clothing tags reuse a type but leave stated variants distinct',()=>{
+  const {context,c}=setup(),s=context.extensionSettings['st-chatu8'];
+  const profile=c.adapter.upsertProfile('a','艾琳','');
+  const uniform=c.adapter.upsertOutfit('a',profile,'艾琳','school uniform',c.chatKey(),'school uniform','generic');
+  assert.equal(s.outfitPresets[uniform].fullBody,'school uniform');
+  assert.equal(c.adapter.upsertOutfit('a',profile,'艾琳','a simple school uniform',c.chatKey(),'school uniform','generic'),uniform);
+  const dark=c.adapter.upsertOutfit('a',profile,'艾琳','black school uniform with silver buttons',c.chatKey(),'school uniform','specified');
+  const white=c.adapter.upsertOutfit('a',profile,'艾琳','white school uniform with a blue ribbon',c.chatKey(),'school uniform','specified');
+  assert.notEqual(dark,white);assert.notEqual(dark,uniform);assert.notEqual(white,uniform);
+  assert.equal(s.outfitPresets[dark].fullBody,'black school uniform with silver buttons');
+  assert.equal(c.adapter.outfitsForProfile(profile).length,3);
+  s.outfitPresets[uniform].fullBody='user edited uniform';
+  const fresh=c.adapter.upsertOutfit('a',profile,'艾琳','school uniform',c.chatKey(),'school uniform','generic');
+  assert.notEqual(fresh,uniform);assert.equal(s.outfitPresets[uniform].fullBody,'user edited uniform');
+});
 test('outfit is saved only when an evidenced scene is submitted',async()=>{
   const {context,c}=setup(),s=context.extensionSettings['st-chatu8'];
   const raw='艾琳穿着黑色外套站在门口。';context.chat[0].mes=raw;
@@ -98,6 +113,14 @@ test('another character outfit preset is not evidence for this character',()=>{
   c.scope().characters.a={id:'a',name:'艾琳',aliases:[],profile:profileA,lock:null};
   const cast={name:'艾琳',aliases:[],gender:'female',fixed_facts:[],outfit:'blue coat',outfit_evidence:'blue coat'};
   c.prepareCharacters({cast:[cast]},{CURRENT_TEXT:'艾琳站在门口。',PREVIOUS_CONTEXT:{recent:'',states:[]},original_outfits:[{profile_ref:profileB,outfits:[{description:'blue coat'}]}]});
+  assert.equal(cast.outfit_grounded,false);
+});
+test('same-character wardrobe entry alone is not evidence of current clothing',()=>{
+  const {c}=setup(),profile=c.adapter.upsertProfile('a','艾琳','');
+  c.adapter.upsertOutfit('a',profile,'艾琳','blue coat',c.chatKey());
+  c.scope().characters.a={id:'a',name:'艾琳',aliases:[],profile,lock:null};
+  const cast={name:'艾琳',aliases:[],gender:'female',fixed_facts:[],outfit:'blue coat',outfit_evidence:'blue coat'};
+  c.prepareCharacters({cast:[cast]},{CURRENT_TEXT:'艾琳站在门口。',PREVIOUS_CONTEXT:{recent:'',states:[]},original_outfits:[{profile_ref:profile,outfits:[{description:'blue coat'}]}]});
   assert.equal(cast.outfit_grounded,false);
 });
 test('profile association is per character and locked associations require an explicit unlock',()=>{
@@ -140,6 +163,15 @@ test('reserved second scene is submitted after the reply ends',async()=>{
   context.chat[0].mes+=second;round.lastCall=0;
   await c.pump(round);assert.deepEqual(sent,['camera']);assert.equal(round.pending.length,1);
   round.final=true;await c.pump(round);assert.deepEqual(sent,['camera','umbrella']);
+});
+test('a complete short scene starts analysis before the reply ends',async()=>{
+  const {context,c}=setup();
+  const raw='艾琳走进大厅，抬头望向窗边。她举起银色相机，对着站台拍下照片。';
+  context.chat[0].mes=raw;c.config().enabled=true;
+  let calls=0;c.analyze=async()=>{calls++;return {scenes:[]};};
+  c.startRound('normal',{},false);
+  await c.pump(c.round);
+  assert.equal(calls,1);assert.equal(c.round.final,false);
 });
 test('inactive same-name profile does not cross chat identity; lock follows confirmed facts',()=>{
   const {context,c}=setup();context.extensionSettings['st-chatu8'].characterPresets.old={nameCN:'艾琳',characterTraits:'purple eyes, long hair'};

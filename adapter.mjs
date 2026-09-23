@@ -158,33 +158,42 @@ export class ChatuAdapter {
   outfitsForProfile(profileId){
     const s=this.settings(),profile=s.characterPresets?.[profileId];
     return (profile?.outfits||[]).map(id=>({id,preset:s.outfitPresets?.[id]})).filter(x=>x.preset).map(({id,preset})=>({
-      id,nameCN:preset.nameCN||'',nameEN:preset.nameEN||'',description:preset.fullBody||preset.upperBody||'',directorOwner:preset.directorOwner||''
+      id,nameCN:preset.nameCN||'',nameEN:preset.nameEN||'',description:preset.fullBody||preset.upperBody||'',upperBody:preset.upperBody||'',directorOwner:preset.directorOwner||'',
+      directorOutfitClass:preset.directorOutfitClass||'',directorOutfitSpecificity:preset.directorOutfitSpecificity||'',directorGeneratedDescription:preset.directorGeneratedDescription||''
     }));
   }
-  upsertOutfit(owner,profileId,characterName,description,scope=''){
+  upsertOutfit(owner,profileId,characterName,description,scope='',category='',specificity='specified'){
     const profile=this.profile(profileId);
     if(!profile)throw new Error('人物档案不存在，无法关联服装');
     const value=String(description||'').trim().replace(/\s+/g,' ');
     if(value.length<3||value.length>180||/[^\x20-\x7e]/.test(value)||/^(unknown|unspecified|none|not specified|n\/a)$/i.test(value))return null;
-    const normalized=value.toLowerCase();
+    const generic=specificity==='generic';
+    const clothingClass=String(category||'').trim().toLowerCase().replace(/\s+/g,' ');
+    if(generic&&(!clothingClass||clothingClass.length>80||/[^a-z0-9, -]/.test(clothingClass)))return null;
+    const stored=generic?clothingClass:value,normalized=stored.toLowerCase();
     const tokens=text=>new Set(String(text||'').toLowerCase().match(/[a-z0-9]+/g)||[]);
-    const incoming=tokens(value);
+    const incoming=tokens(stored);
     const same=text=>{
       const other=String(text||'').trim().replace(/\s+/g,' ').toLowerCase();
       if(other===normalized)return true;
       const known=tokens(other),union=new Set([...incoming,...known]);
       return incoming.size>=2&&known.size>=2&&[...incoming].filter(word=>known.has(word)).length/union.size>=0.9;
     };
-    const existing=this.outfitsForProfile(profileId).find(x=>[x.nameEN,x.description].some(same));
+    const existing=this.outfitsForProfile(profileId).find(x=>generic
+      ? x.directorOwner===owner&&x.directorOutfitSpecificity==='generic'&&x.directorOutfitClass===clothingClass&&x.description===x.directorGeneratedDescription&&x.upperBody===x.directorGeneratedDescription
+      : x.directorOutfitSpecificity!=='generic'&&[x.nameEN,x.description].some(same));
     if(existing)return existing.id;
     const s=this.settings();s.outfitPresets ||= {};profile.outfits ||= [];
-    const id=`nd_outfit_${owner}_${fingerprint(normalized)}`;
+    const base=`nd_outfit_${owner}_${fingerprint(generic?'generic:'+normalized:normalized)}`;
+    let id=base,version=2;
+    while(s.outfitPresets[id]&&s.outfitPresets[id].directorOwner===owner&&
+      (s.outfitPresets[id].directorGeneratedDescription!==stored||s.outfitPresets[id].fullBody!==stored||s.outfitPresets[id].upperBody!==stored))id=`${base}_${version++}`;
     if(s.outfitPresets[id]){
       if(s.outfitPresets[id].directorOwner!==owner)throw new Error('服装 ID 冲突，已停止写入');
     }else{
       s.outfitPresets[id]={nameCN:`${characterName} - 导演服装 ${profile.outfits.length+1}`,nameEN:'',owner:profile.nameEN||characterName,
-        upperBody:value,upperBodyBack:'',fullBody:value,fullBodyBack:'',photoImageIds:[],selectedPhotoIndex:0,photoPrompt:'',sendPhoto:false,
-        directorOwner:owner,directorScope:scope,directorGeneratedDescription:value};
+        upperBody:stored,upperBodyBack:'',fullBody:stored,fullBodyBack:'',photoImageIds:[],selectedPhotoIndex:0,photoPrompt:'',sendPhoto:false,
+        directorOwner:owner,directorScope:scope,directorGeneratedDescription:stored,directorOutfitClass:clothingClass,directorOutfitSpecificity:generic?'generic':'specified'};
     }
     if(!profile.outfits.includes(id))profile.outfits.push(id);
     this.context().saveSettingsDebounced();return id;

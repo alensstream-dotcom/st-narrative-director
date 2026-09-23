@@ -59,12 +59,12 @@ export class Controller {
     const originalOutfits=profiles.map(p=>{
       const linked=this.adapter.outfitsForProfile(p.id);
       const named=linked.filter(o=>[o.nameCN,o.nameEN].some(name=>name&&text.includes(name)));
-      return {profile_ref:p.id,outfits:[...new Map([...named,...linked.slice(-3)].map(o=>[o.id,o])).values()].slice(0,5).map(o=>({id:o.id,nameCN:o.nameCN,nameEN:o.nameEN,description:o.description.slice(0,160)}))};
+      return {profile_ref:p.id,outfits:[...new Map([...named,...linked.slice(-3)].map(o=>[o.id,o])).values()].slice(0,5).map(o=>({id:o.id,nameCN:o.nameCN,nameEN:o.nameEN,description:o.description.slice(0,160),outfit_class:o.directorOutfitClass,outfit_specificity:o.directorOutfitSpecificity}))};
     }).filter(p=>p.outfits.length);
     const styleSettings=this.adapter.settings(),style=styleSettings.yushe?.[styleSettings.yusheid_comfyui];
     const input={mode:manual?'manual':'automatic',CURRENT_TEXT:narrative(selected),PREVIOUS_CONTEXT:history,character_card:this.card(),original_profiles:profiles,original_outfits:originalOutfits,
       renderer_style:{prefix:style?.fixedPrompt||'',suffix:style?.fixedPrompt_end||'',rule:'Describe scene content only. Do not override these styles or add style exclusions.'},
-      active_lore:this.activeLore,visual_registry:registry,already_chosen:chosen.map(s=>({event_key:s.event_key,moment:s.moment})),remaining:2-chosen.length};
+      active_lore:this.activeLore,visual_registry:registry,already_chosen:chosen.map(s=>({event_key:s.event_key,moment:s.moment,evidence:s.anchor?.quote||'',action:s.shot?.action||'',essential_visible:s.shot?.essential_visible||[]})),remaining:2-chosen.length};
     const result=await this.api.analyze(input,signal);
     if(epoch!==this.epoch||!this.resolve(binding))throw new Error('分析期间原文已改变');
     const scenes=result.scenes.slice(0,manual?3:2).map(s=>validateScene(s,raw,{start,end},manual)).filter(Boolean);
@@ -105,7 +105,7 @@ export class Controller {
         if(!candidates.some(p=>p.id===character.prototypeId))character.prototypeId=candidates[0]?.id||'';
       }
       cast.character_id=character.id;cast.profile_ref=character.profile;
-      const clothingSources=[input.CURRENT_TEXT||'',input.PREVIOUS_CONTEXT?.recent||'',JSON.stringify(input.PREVIOUS_CONTEXT?.states||[]),JSON.stringify(input.character_card||{}),JSON.stringify((input.original_outfits||[]).find(p=>p.profile_ref===character.profile)||{})];
+      const clothingSources=[input.CURRENT_TEXT||'',input.PREVIOUS_CONTEXT?.recent||'',JSON.stringify(input.PREVIOUS_CONTEXT?.states||[]),JSON.stringify(input.character_card||{})];
       cast.outfit_grounded=typeof cast.outfit_evidence==='string'&&cast.outfit_evidence.trim().length>=2&&clothingSources.some(source=>source.includes(cast.outfit_evidence));
     }
     this.save();
@@ -143,7 +143,7 @@ export class Controller {
     if(origin==='manual'){this.config().approvedModel=snapshot.model;this.save();}
     for(const cast of scene.cast||[]){
       if(cast.character_id&&cast.profile_ref&&cast.outfit_grounded){
-        cast.outfit_ref=this.adapter.upsertOutfit(cast.character_id,cast.profile_ref,cast.name,cast.outfit,this.chatKey());
+        cast.outfit_ref=this.adapter.upsertOutfit(cast.character_id,cast.profile_ref,cast.name,cast.outfit,this.chatKey(),cast.outfit_class,cast.outfit_specificity);
       }
     }
     const task=new Task({binding,scene,origin,backend:snapshot.backend,snapshot});task.abort=new AbortController();
@@ -188,7 +188,7 @@ export class Controller {
     const index=r.messageId?this.ctx().chat.findIndex(m=>m.extra?.[NS]?.id===r.messageId):this.ctx().chat.length-1,m=this.ctx().chat[index];if(!m||m.is_user||m.is_system)return;
     r.messageId=this.meta(m).id;
     const raw=m.mes||'',end=completeEnd(narrative(raw),r.final);
-    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length)||end-r.cursor<100&&!r.final)return;
+    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length)||end-r.cursor<28&&!r.final)return;
     if(!r.final&&Date.now()-r.lastCall<7000){r.timer=setTimeout(()=>{r.timer=null;void this.pump(r);},1500);return;}
     r.busy=true;r.lastCall=Date.now();this.status('导演正在旁路分析');
     try{

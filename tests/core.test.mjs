@@ -31,6 +31,15 @@ test('automatic second shot never backfills an earlier moment',()=>{
   const b=new AutoBudget(),late={event_key:'camera',anchor:{start:42,end:120},score:.9},early={event_key:'changing-room',anchor:{start:0,end:42},score:.8};
   assert.ok(b.accept(late));assert.equal(b.canAccept(early,true),false);assert.equal(b.accept(early,true),false);
 });
+test('adjacent follow-through of the same subject cannot fill the second automatic slot',()=>{
+  const b=new AutoBudget(),first={event_key:'camera-shot',anchor:{start:0,end:60},score:.94,cast:[{character_id:'erin',is_subject:true}]};
+  assert.ok(b.accept(first));
+  const follow={event_key:'camera-lowered',anchor:{start:60,end:100},score:.9,cast:[{character_id:'erin',is_subject:true}]};
+  assert.equal(b.canAccept(follow,true),false);
+  assert.equal(b.canAccept({...follow,score:.96},true),true);
+  assert.equal(b.canAccept({...follow,cast:[{character_id:'other',is_subject:true}]},true),true);
+  assert.equal(b.canAccept({...follow,anchor:{start:160,end:200}},true),true);
+});
 test('terminal states reject late completion',()=>{
   const t=new Task({binding:{},scene:{},origin:'manual'});t.set('cancelled');assert.equal(t.set('done'),false);assert.equal(t.state,'cancelled');
 });
