@@ -7,12 +7,18 @@ const assert=require('node:assert/strict');
     const errors=[];page.on('pageerror',e=>{if(e.stack?.includes('st-narrative-director'))errors.push(e.message);});
     await page.goto('http://localhost:11451/',{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')],null,{timeout:90000});
+    await page.waitForFunction(async()=>(await import('/script.js')).settingsReady,null,{timeout:90000});
     await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].ui.settings());
-    await page.getByRole('button',{name:'读取当前连接',exact:true}).waitFor();
+    await page.getByRole('button',{name:'使用正文连接的独立副本',exact:true}).waitFor();
     if(process.argv.includes('--configure')){
-      await page.getByRole('button',{name:'读取当前连接',exact:true}).click();
+      const saved=page.waitForResponse(r=>{
+        if(!r.url().endsWith('/api/settings/save')||r.request().method()!=='POST')return false;
+        const config=r.request().postDataJSON()?.extension_settings?.narrative_director_v1;
+        return !!config?.model&&!!config?.secretId;
+      },{timeout:90000});
+      await page.getByRole('button',{name:'使用正文连接的独立副本',exact:true}).click();
       await page.waitForFunction(()=>!!globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.config().secretId);
-      await page.waitForTimeout(2500);
+      assert.ok((await saved).ok(),'Settings save failed');
     }
     const result=await page.evaluate(()=>{
       const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,config=c.config(),d=document.querySelector('.nd-dialog');
