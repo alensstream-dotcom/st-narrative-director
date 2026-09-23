@@ -5,7 +5,7 @@ const path=require('node:path');
  const browser=await chromium.launch({channel:'msedge',headless:true});
  try{
  const base=(process.env.DIRECTOR_ST_URL||'http://localhost:11451').replace(/\/$/,'');
- const page=await browser.newPage({viewport:{width:process.argv.includes('--desktop')?1280:430,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const page=await browser.newPage({viewport:{width:process.argv.includes('--desktop')?1280:430,height:900},hasTouch:process.argv.includes('--touch')});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const cdp=await browser.newBrowserCDPSession();
  const {browserContextIds}=await cdp.send('Target.getBrowserContexts');
  if(!process.argv.includes('--proxy'))for(const name of ['local-network-access','loopback-network','local-network'])await cdp.send('Browser.setPermission',{permission:{name},setting:'granted',origin:base,browserContextId:browserContextIds[0]});
@@ -112,6 +112,24 @@ const path=require('node:path');
    const file=process.argv.includes('--desktop')?'artifacts/characters-desktop.png':'artifacts/characters-mobile.png';
    await page.screenshot({path:file,fullPage:true});
    console.log(JSON.stringify({phase:'ui',viewport:process.argv.includes('--desktop')?'desktop':'mobile',overflow,errors,screenshot:file}));
+ }
+ if(process.argv.includes('--touch')){
+   let imageRequests=0;page.on('request',r=>{if(r.method()==='POST'&&(r.url().includes('/api/sd/comfy/generate')||new URL(r.url()).pathname==='/prompt'))imageRequests++;});
+   await page.getByRole('button',{name:'关闭',exact:true}).click();
+   await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+     const {locateQuote}=await import('../core.mjs');
+     c.analyze=async(index,raw,start,end)=>({binding:c.bind(index,raw,end),scenes:[{moment:'跨段选中的单一画面',anchor:locateQuote(raw,raw.slice(start,end),start,end),cast:[],positive:'A woman standing at a station window with her complete face visible.',negative:'text, watermark'}]});
+     const paragraphs=document.querySelectorAll('.mes_text p'),range=document.createRange();range.selectNodeContents(paragraphs[0]);range.setEnd(paragraphs[1].firstChild,paragraphs[1].firstChild.length);
+     getSelection().removeAllRanges();getSelection().addRange(range);
+   });
+   await page.getByRole('button',{name:'生成图片',exact:true}).tap();
+   await page.getByRole('button',{name:'确认生成',exact:true}).waitFor();
+   const quote=await page.locator('.nd-dialog blockquote').textContent();
+   if(!quote.includes('艾琳走进车站大厅')||!quote.includes('等待'))throw new Error('Touch tap lost the cross-paragraph selection');
+   await page.getByRole('button',{name:'关闭',exact:true}).click();
+   if(imageRequests!==0)throw new Error('Touch preview requested an image before confirmation');
+   console.log(JSON.stringify({phase:'touch-selection',crossParagraph:true,previewOpened:true,imageRequests,errors}));
  }
  if(process.argv.includes('--redraw')){
    await page.getByRole('button',{name:'关闭',exact:true}).click();
