@@ -13,6 +13,10 @@ test('stable binding rejects swipe, deleted/replaced message, chat change and so
   context.chat[0]={mes:raw,swipe_id:0};assert.equal(c.resolve(b),null);
 });
 test('metadata never changes story text',()=>{const {context,c}=setup(),before=context.chat[0].mes;c.bind(0,before,before.length);assert.equal(context.chat[0].mes,before);assert.ok(context.chat[0].extra[NS].id);});
+test('new installs default to the user-selected auxiliary API and keep auto generation disabled',()=>{
+  const {c}=setup(),config=c.config();assert.equal(config.source,'custom');assert.equal(config.model,'gpt-6-sol');
+  assert.equal(config.url,'https://api-slb.krill-code.net/v1');assert.equal(config.credentialMode,'session');assert.equal(config.enabled,false);
+});
 test('redraw and backend changes do not accumulate renderer styles',()=>{
   const {c}=setup(),base='A woman holding a camera.',snapshot={prefix:'anime illustration',suffix:'soft shading',negative:'watermark'};
   const first=c.effective({positive:base},snapshot);
@@ -53,6 +57,18 @@ test('director-owned profile fills new facts and preserves later user edits',()=
   s.characterPresets[id].characterTraits='User edited, do not replace';
   assert.equal(c.adapter.syncOwnedFacts(id,'character-a',[{field:'face',value:'round',evidence:'圆脸'}]).reason,'user-edited');
   assert.equal(s.characterPresets[id].characterTraits,'User edited, do not replace');
+});
+test('model fixed-fact field names persist as stable character memory',()=>{
+  const {context,c}=setup(),raw='艾琳有银色长发和绿色眼睛。';context.chat[0].mes=raw;
+  const cast={name:'艾琳',aliases:[],gender:'female',fixed_facts:[
+    {field:'hair_color',value:'silver',evidence:'银色',source:'CURRENT_TEXT'},
+    {field:'eye_color',value:'green',evidence:'绿色眼睛',source:'CURRENT_TEXT'}
+  ]};
+  c.prepareCharacters({cast:[cast]},{CURRENT_TEXT:raw,PREVIOUS_CONTEXT:{recent:'',states:[]}});
+  assert.deepEqual(cast.fixed_facts.map(f=>f.field),['hair_color','eye_color']);
+  const character=Object.values(c.scope().characters)[0];
+  assert.deepEqual(character.visualFacts,{hair_color:'silver',eye_color:'green'});
+  assert.match(context.extensionSettings['st-chatu8'].characterPresets[character.profile].characterTraits,/silver/);
 });
 test('outfit presets are linked only to the matching profile and never alter global enable lists',()=>{
   const {context,c}=setup(),s=context.extensionSettings['st-chatu8'];
@@ -143,6 +159,31 @@ test('matching Anima character tag persists without changing story clothing or a
   c.setPrototype(character.id,'none');assert.doesNotMatch(c.effective(scene,snapshot).positive,/violet evergarden/);
   c.setPrototype(character.id,'candidate','violet');assert.match(c.effective(scene,snapshot).positive,/violet evergarden/);
   character.lock={facts:[]};assert.throws(()=>c.setPrototype(character.id,'none'),/解除/);
+});
+test('Miaomiao/Anima character shots enforce a visible frontal face but honor source-evidenced exceptions',()=>{
+  const {c}=setup(),snapshot={backend:'comfyui',model:'miaomiaoHarem_29BBETA10.safetensors',prefix:'masterpiece',suffix:'',negative:'text'};
+  const scene={subject:'characters',cast:[{is_subject:true}],shot:{face_visibility:'both_eyes'},anchor:{quote:'Erin takes a photo.'},
+    positive:'three-quarter view, both eyes visible. Erin presses the shutter of her raised silver camera at the station window.',negative:'text'};
+  const framed=c.effective(scene,snapshot);
+  assert.match(framed.positive,/front view, both eyes visible, unobstructed face/);
+  assert.doesNotMatch(framed.positive,/three-quarter view/);
+  assert.doesNotMatch(framed.positive,/and an unobstructed face/);
+  assert.match(framed.positive,/camera at chest height below the chin/);
+  assert.match(framed.positive,/camera held at chest height/);
+  assert.doesNotMatch(framed.positive,/raised silver camera/);
+  assert.match(framed.negative,/profile/);
+  assert.match(framed.negative,/camera covering face/);
+  assert.match(framed.negative,/camera covering nose or mouth/);
+  assert.match(framed.negative,/camera at eye level/);
+  assert.match(framed.negative,/inset photograph/);
+  const other=c.effective(scene,{...snapshot,model:'other-model'});
+  assert.doesNotMatch(other.positive,/front view, both eyes visible/);
+  scene.shot={face_visibility:'hidden',face_visibility_evidence:'turns her back'};
+  scene.anchor.quote='Erin turns her back.';
+  const hidden=c.effective(scene,snapshot);
+  assert.equal(hidden.faceLock,false);
+  assert.doesNotMatch(hidden.positive,/front view/);
+  assert.doesNotMatch(hidden.negative,/profile/);
 });
 test('manual quota is independent and cancelled queued task cannot complete',async()=>{
   const {context,c}=setup(),raw=context.chat[0].mes,b=c.bind(0,raw,raw.length);

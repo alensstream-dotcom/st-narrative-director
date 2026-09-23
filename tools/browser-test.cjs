@@ -32,6 +32,64 @@ const path=require('node:path');
  fs.mkdirSync('artifacts',{recursive:true});await page.screenshot({path:'artifacts/settings-mobile.png',fullPage:true});
  console.log('SCREENSHOT artifacts/settings-mobile.png');
  console.log(JSON.stringify({afterClickErrors:errors}));
+ if(process.argv.includes('--director-test')){
+   const probe=await page.evaluate(async()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;try{await c.api.testConnection();return {ok:true};}catch(e){return {ok:false,status:e.status||0,message:e.message};}});
+   console.log(JSON.stringify({phase:'director-test',...probe}));
+ }
+ if(process.argv.includes('--analysis-probe')){
+   const probes=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,{DIRECTOR_SCHEMA}=await import('../schema.mjs'),out=[];
+     for(const withSchema of [false,true]){
+       const start=performance.now();
+       try{
+         const result=await c.api.post('/api/backends/chat-completions/generate',{...c.api.connection(),stream:false,temperature:0,max_tokens:900,reasoning_effort:'minimal',messages:[{role:'system',content:'Return JSON only. Analyze one visual moment, use concise English scene prompts, do not invent facts. Output {"scenes":[],"state_updates":[]}.'},{role:'user',content:'CURRENT_TEXT: A silver-haired woman stands at a rainy station entrance, holding a red umbrella and smiling back. Return one grounded scene.'}],...(withSchema?{json_schema:{name:'scene_director',strict:false,value:DIRECTOR_SCHEMA}}:{})},AbortSignal.timeout(45000));
+         out.push({schema:withSchema,ok:true,ms:Math.round(performance.now()-start),bodyKeys:Object.keys(result),responseLength:String(result.choices?.[0]?.message?.content||'').length});
+       }catch(e){out.push({schema:withSchema,ok:false,ms:Math.round(performance.now()-start),status:e.status||0,message:e.message});}
+     }
+     return out;
+   });
+   console.log(JSON.stringify({phase:'analysis-probe',probes}));
+ }
+ if(process.argv.includes('--full-analysis-probe')){
+   const probe=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,{DIRECTOR_SYSTEM}=await import('../core.mjs'),{DIRECTOR_SCHEMA}=await import('../schema.mjs'),start=performance.now();
+     const input={mode:'manual',CURRENT_TEXT:'艾琳穿着白裙站在车站大厅，银发和绿色眼睛被窗边阳光照亮。她拿起银色相机，对着窗外站台拍了一张照片。\n\n半小时后，她换上黑色长袖外套和长裤，从更衣室走出。她撑开一把红色雨伞，站在雨中的车站门口，回头朝我微笑。',PREVIOUS_CONTEXT:{recent:'',states:[]},character_card:{name:'艾琳',description:'成年女性，银色及肩短发，绿色眼睛。'},original_profiles:[],original_outfits:[],renderer_style:{prefix:'masterpiece, best quality, anime illustration',suffix:'detailed eyes, clean lineart'},active_lore:[],visual_registry:[],already_chosen:[],remaining:2};
+     try{
+       const result=await c.api.post('/api/backends/chat-completions/generate',{...c.api.connection(),stream:false,temperature:0.2,max_tokens:2100,reasoning_effort:'minimal',messages:[{role:'system',content:DIRECTOR_SYSTEM},{role:'user',content:JSON.stringify(input)}],json_schema:{name:'scene_director',strict:false,value:DIRECTOR_SCHEMA}},AbortSignal.timeout(45000));
+       const content=String(result.choices?.[0]?.message?.content||'');return {ok:true,ms:Math.round(performance.now()-start),responseLength:content.length,bodyKeys:Object.keys(result),validJson:(await import('../core.mjs')).parseJson(content).scenes.length};
+     }catch(e){return {ok:false,ms:Math.round(performance.now()-start),status:e.status||0,message:e.message};}
+   });
+   console.log(JSON.stringify({phase:'full-analysis-probe',...probe}));
+ }
+ if(process.argv.includes('--memory-analysis')){
+   const result=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,raw=c.ctx().chat[0].mes;
+     const analyzed=await c.analyze(0,raw,0,raw.length,true,new AbortController().signal),cast=analyzed.scenes[0]?.cast?.[0],character=Object.values(c.scope().characters).find(x=>x.name===cast?.name);
+     return {scenes:analyzed.scenes.length,fixedFields:cast?.fixed_facts?.map(f=>f.field)||[],visualFacts:character?.visualFacts||{},profileTraits:c.adapter.profile(character?.profile)?.characterTraits||''};
+   });
+   console.log(JSON.stringify({phase:'memory-analysis',...result}));
+   if(!result.visualFacts.hair_color||!result.visualFacts.eye_color)throw new Error('Director analysis did not persist the fixed hair/eye facts');
+ }
+ if(process.argv.includes('--dialogue-analysis')){
+   const result=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+     window.testHarness.setText('艾琳站在车站门口，手里握着红色雨伞。她笑着问：“你真的要走吗？”对方停下脚步，没有回答。她低头看向相机。');
+     const raw=c.ctx().chat[0].mes,analyzed=await c.analyze(0,raw,0,raw.length,true,new AbortController().signal),scene=analyzed.scenes[0];
+     return {scenes:analyzed.scenes.length,evidence:scene?.evidence,positive:scene?.positive,negative:scene?.negative};
+   });
+   console.log(JSON.stringify({phase:'dialogue-analysis',...result}));
+   if(!result.scenes||/speech balloon|speech bubble|dialogue|caption|lettering|“|”/.test(result.positive))throw new Error('Dialogue was rendered as text instead of visual expression');
+ }
+ if(process.argv.includes('--framing-analysis')){
+   const result=await page.evaluate(async()=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+     window.testHarness.setText('艾琳站在雨中的车站入口，面向我微笑。她撑着红色雨伞，银色及肩短发垂在肩上，两只绿色眼睛清晰可见。');
+     const raw=c.ctx().chat[0].mes,analyzed=await c.analyze(0,raw,0,raw.length,true,new AbortController().signal),scene=analyzed.scenes[0];
+     return {scenes:analyzed.scenes.length,evidence:scene?.evidence,positive:scene?.positive,framing:scene?.shot?.framing};
+   });
+   console.log(JSON.stringify({phase:'framing-analysis',...result}));
+   if(!result.scenes||!/(front view|three-quarter view)/i.test(result.positive)||!/both eyes visible/i.test(result.positive))throw new Error('Anima-native face framing tags were not emitted');
+ }
  if(process.argv.includes('--models')){
    const models=await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.api.models());
    if(!models.includes('gpt-6-sol'))throw new Error('Selected Sol model missing from live model list');
@@ -113,6 +171,22 @@ const path=require('node:path');
    await page.screenshot({path:file,fullPage:true});
    console.log(JSON.stringify({phase:'ui',viewport:process.argv.includes('--desktop')?'desktop':'mobile',overflow,errors,screenshot:file}));
  }
+ if(process.argv.includes('--face-render')){
+   const result=await page.evaluate(async(includeOutfit)=>{
+     const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;
+     await c.adapter.inspectComfy();
+     const snapshot=c.adapter.snapshot('comfyui');
+     const scene={subject:'characters',cast:[{is_subject:true}],shot:{face_visibility:'both_eyes'},
+       anchor:{quote:includeOutfit?'Erin, wearing a black jacket and skirt, presses the shutter of her silver camera at the station window.':'Erin presses the shutter of her silver camera at the station window.'},
+       positive:includeOutfit?'Erin, a short silver-haired woman with green eyes and a small mole beneath her left eye, wears a fitted black jacket and black skirt while pressing the shutter of a silver camera at chest height beside a station-hall window. Her shoulders and face turn toward the viewer while her eyes glance toward the platform beyond the glass; both eyes and her camera are unobstructed.':'Erin, a short silver-haired woman with green eyes and a small mole beneath her left eye, presses the shutter of a silver camera at chest height beside a station-hall window. Her shoulders and face turn toward the viewer while her eyes glance toward the platform beyond the glass; both eyes and her camera are unobstructed.',
+       negative:'text, lettering, speech balloons'};
+     const prompts=c.effective(scene,snapshot),generated=await c.adapter.generate(snapshot,{id:'face-lock-check-'+Date.now(),positive:prompts.positive,negative:prompts.negative});
+     return {imageId:generated.imageId,model:generated.params?.model,workflow:generated.params?.workflow,parameters:generated.params?.parameters,
+       prompt:prompts.positive,negative:prompts.negative,faceLock:prompts.faceLock,outfitCase:includeOutfit};
+   },process.argv.includes('--face-outfit'));
+   console.log(JSON.stringify({phase:'face-render',...result}));
+   return;
+ }
  if(process.argv.includes('--touch')){
    let imageRequests=0;page.on('request',r=>{if(r.method()==='POST'&&(r.url().includes('/api/sd/comfy/generate')||new URL(r.url()).pathname==='/prompt'))imageRequests++;});
    await page.getByRole('button',{name:'关闭',exact:true}).click();
@@ -127,9 +201,12 @@ const path=require('node:path');
    await page.getByRole('button',{name:'确认生成',exact:true}).waitFor();
    const quote=await page.locator('.nd-dialog blockquote').textContent();
    if(!quote.includes('艾琳走进车站大厅')||!quote.includes('等待'))throw new Error('Touch tap lost the cross-paragraph selection');
+   const previewLayout=await page.locator('.nd-dialog').evaluate(d=>({overflow:d.scrollWidth>d.clientWidth+1,primaryVisible:!!d.querySelector('.nd-primary')?.getClientRects().length}));
+   if(previewLayout.overflow||!previewLayout.primaryVisible)throw new Error('Touch prompt preview layout is clipped');
+   await page.screenshot({path:'artifacts/touch-preview-430.png'});
    await page.getByRole('button',{name:'关闭',exact:true}).click();
    if(imageRequests!==0)throw new Error('Touch preview requested an image before confirmation');
-   console.log(JSON.stringify({phase:'touch-selection',crossParagraph:true,previewOpened:true,imageRequests,errors}));
+   console.log(JSON.stringify({phase:'touch-selection',crossParagraph:true,previewOpened:true,imageRequests,previewLayout,errors}));
  }
  if(process.argv.includes('--redraw')){
    await page.getByRole('button',{name:'关闭',exact:true}).click();
@@ -188,9 +265,10 @@ const path=require('node:path');
  if(process.argv.includes('--real')){
    page.setDefaultTimeout(180000);
    await page.getByRole('button',{name:'关闭',exact:true}).click();
-   if(process.argv.includes('--multi'))await page.evaluate(()=>window.testHarness.setText('艾琳穿着白裙站在车站大厅，银发和绿色眼睛被窗边阳光照亮。她拿起银色相机，对着窗外站台拍了一张照片。\n\n半小时后，她换上黑色长袖外套和长裤，从更衣室走出。她撑开一把红色雨伞，站在雨中的车站门口，回头朝我微笑。'));
+   if(process.argv.includes('--face-front'))await page.evaluate(()=>window.testHarness.setText('艾琳站在雨中的车站入口，面向我微笑。她撑着红色雨伞，银色及肩短发垂在肩上，两只绿色眼睛清晰可见。'));
+   else if(process.argv.includes('--multi'))await page.evaluate(()=>window.testHarness.setText('艾琳穿着白裙站在车站大厅，银发和绿色眼睛被窗边阳光照亮。她拿起银色相机，对着窗外站台拍了一张照片。\n\n半小时后，她换上黑色长袖外套和长裤，从更衣室走出。她撑开一把红色雨伞，站在雨中的车站门口，回头朝我微笑。'));
    let imageRequests=0;page.on('request',r=>{if(r.method()==='POST'&&(r.url().includes('/api/sd/comfy/generate')||new URL(r.url()).pathname==='/prompt'))imageRequests++;});
-   page.on('response',async r=>{if(r.url().includes('/api/backends/chat-completions/generate')){try{const v=await r.json();console.log(JSON.stringify({directorResponse:String(v.choices?.[0]?.message?.content||'').slice(0,3000)}));}catch{}}});
+   page.on('response',async r=>{if(r.url().includes('/api/backends/chat-completions/generate')){try{const v=await r.json(),err=v.error;console.log(JSON.stringify({directorHttpStatus:r.status(),directorResponse:String(v.choices?.[0]?.message?.content||'').slice(0,3000),directorError:(typeof err==='string'?err:err?.message||err?.type||'').toString().slice(0,300),directorErrorCode:String(err?.code||err?.status||''),quotaErrorKeys:v.quota_error&&typeof v.quota_error==='object'?Object.keys(v.quota_error):[],directorBodyKeys:Object.keys(v)}));}catch{console.log(JSON.stringify({directorHttpStatus:r.status(),directorResponseUnreadable:true}));}}});
    await page.evaluate(multi=>{const paragraphs=document.querySelectorAll('.mes_text p'),r=document.createRange();r.selectNodeContents(paragraphs[0]);if(multi)r.setEnd(paragraphs[1].firstChild,paragraphs[1].firstChild.length);getSelection().removeAllRanges();getSelection().addRange(r);},process.argv.includes('--multi'));
    await page.getByRole('button',{name:'生成图片',exact:true}).click();
    await page.waitForFunction(()=>document.querySelector('.nd-dialog .nd-status')?.textContent!=='分析选中剧情…',null,{timeout:110000});
@@ -209,17 +287,19 @@ const path=require('node:path');
    await page.screenshot({path:'artifacts/manual-preview-mobile.png',fullPage:true});
    await page.getByRole('button',{name:'确认生成',exact:true}).click();
    await page.waitForFunction(()=>[...globalThis[Symbol.for('st.narrative-director.debug.v1')].controller.tasks.values()].some(t=>t.terminal),null,{timeout:600000});
-   const result=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;return {phase:'manual-result',tasks:[...c.tasks.values()].map(t=>({state:t.state,detail:t.detail})),records:c.ctx().chat[0].extra?.narrative_director_v1?.images};});
+   const result=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,records=c.ctx().chat[0].extra?.narrative_director_v1?.images,cast=records?.[0]?.scene.cast?.[0],s=c.adapter.settings();return {phase:'manual-result',tasks:[...c.tasks.values()].map(t=>({state:t.state,detail:t.detail})),records,outfitAfter:{grounded:!!cast?.outfit_grounded,ref:cast?.outfit_ref,preset:s.outfitPresets?.[cast?.outfit_ref],linked:s.characterPresets?.[cast?.profile_ref]?.outfits?.includes(cast?.outfit_ref)}};});
    console.log(JSON.stringify(result));fs.writeFileSync('artifacts/manual-result.json',JSON.stringify(result,null,2));
    if(result.tasks.some(t=>t.state!=='done'))throw new Error('Image task failed');
-   const outfitAfter=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller,s=c.adapter.settings(),cast=c.ctx().chat[0].extra?.narrative_director_v1?.images?.[0]?.scene.cast?.[0];return {ref:cast?.outfit_ref,preset:s.outfitPresets?.[cast?.outfit_ref],linked:s.characterPresets?.[cast?.profile_ref]?.outfits?.includes(cast?.outfit_ref)};});
-   if(!outfitAfter.ref||!outfitAfter.preset||!outfitAfter.linked)throw new Error('Confirmed image did not link its evidenced outfit to the original manager');
-   console.log(JSON.stringify({phase:'outfit-sync',ref:outfitAfter.ref,description:outfitAfter.preset.fullBody,linked:outfitAfter.linked}));
+   const outfitAfter=result.outfitAfter;
+   if(outfitAfter.grounded&&(!outfitAfter.ref||!outfitAfter.preset||!outfitAfter.linked))throw new Error('Confirmed image did not link its evidenced outfit to the original manager');
+   if(!outfitAfter.grounded&&outfitAfter.ref)throw new Error('An unspecified outfit was incorrectly saved into the character manager');
+   console.log(JSON.stringify({phase:outfitAfter.grounded?'outfit-sync':'outfit-omitted',ref:outfitAfter.ref||'',linked:outfitAfter.linked||false}));
    await page.locator('.nd-image img').waitFor();await page.locator('.nd-image img').evaluate(img=>img.decode());
    await page.screenshot({path:'artifacts/manual-result-mobile.png',fullPage:true});
    const preserved=await page.locator('.test-options button').count();if(preserved!==4)throw new Error('Story options changed');
    await page.locator('.test-options button').first().click();
    console.log(JSON.stringify({phase:'manual-verified',imageRequests,optionsPreserved:preserved,errors}));
+   if(process.argv.includes('--manual-only'))return;
    await page.getByRole('button',{name:'锁定形象',exact:true}).click();
    await page.getByRole('button',{name:'锁定固定外貌',exact:true}).click();
    await page.getByRole('button',{name:'关闭',exact:true}).click();
@@ -244,6 +324,13 @@ const path=require('node:path');
    const autoResult=await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;return {tasks:[...c.tasks.values()].map(t=>({state:t.state,origin:t.origin,detail:t.detail,nativeId:t.nativeId})),characters:Object.values(c.scope().characters),images:c.ctx().chat[1].extra?.narrative_director_v1?.images};});
    if(streamed&&(autoResult.tasks.filter(t=>t.origin==='automatic').length!==1||autoResult.images?.length!==1||imageRequests!==2))throw new Error('Streamed reply made duplicate or missing automatic images');
    fs.writeFileSync('artifacts/auto-result.json',JSON.stringify(autoResult,null,2));console.log(JSON.stringify({phase:'automatic-result',...autoResult}));
+   if(streamed){
+     const locked=autoResult.characters.find(c=>c.lock?.facts?.length),autoPrompt=autoResult.images?.[0]?.scene?.basePositive||autoResult.images?.[0]?.scene?.positive||'';
+     if(!locked)throw new Error('User-confirmed appearance lock was not retained for the next scene');
+     if(locked.visualFacts?.hair_color&&!autoPrompt.toLowerCase().includes(locked.visualFacts.hair_color.toLowerCase()))throw new Error('Locked hair color was lost in the following scene');
+     if(locked.visualFacts?.eye_color&&!autoPrompt.toLowerCase().includes(locked.visualFacts.eye_color.toLowerCase()))throw new Error('Locked eye color was lost in the following scene');
+     console.log(JSON.stringify({phase:'lock-reuse',character:locked.name,fields:Object.keys(locked.visualFacts||{}),prototypeTag:autoResult.images?.[0]?.scene?.prototypeTag||''}));
+   }
    await page.evaluate(()=>{const c=globalThis[Symbol.for('st.narrative-director.debug.v1')].controller;c.ctx().chat[1].swipe_id=1;c.invalidate();});
    await page.waitForFunction(()=>!document.querySelector('.mes[mesid="1"] .nd-image'));
    console.log(JSON.stringify({phase:'swipe-isolation',passed:true,errors,imageRequests}));

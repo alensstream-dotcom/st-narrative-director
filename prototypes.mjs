@@ -29,6 +29,19 @@ export function prototypeCandidates(facts,gender='female'){
   const features=String(byField.distinctive_features||'').toLowerCase();
   return BANK.filter(p=>p.gender===gender&&p.hair===hair&&p.eyes===eyes&&(!length||p.style===length)&&(!p.feature||features.includes(p.feature)));
 }
+export function prototypeSearchUrl(character){
+  const facts=character?.visualFacts||{},params=new URLSearchParams({mode:'characters'});
+  const hair=String(facts.hair_color||'').toLowerCase(),eyes=String(facts.eye_color||'').toLowerCase(),style=String(facts.hair_style||'').toLowerCase();
+  const hairFacet=[['silver|platinum','silver hair'],['white','white hair'],['gray|grey','grey hair'],['blond|blonde|gold|yellow','blonde hair'],['black','black hair'],['blue|azure','blue hair'],['pink','pink hair'],['red|auburn|ginger|orange','red hair'],['brown|chestnut','brown hair'],['purple|violet','purple hair'],['green','green hair']].find(([pattern])=>new RegExp(pattern).test(hair))?.[1];
+  const eyeFacet=[['blue|azure','blue eyes'],['green|emerald','green eyes'],['red|crimson','red eyes'],['purple|violet','purple eyes'],['gray|grey|silver','grey eyes'],['gold|amber|yellow','yellow eyes'],['brown','brown eyes'],['black','black eyes'],['pink','pink eyes']].find(([pattern])=>new RegExp(pattern).test(eyes))?.[1];
+  const lengthFacet=/\b(?:short|bob|pixie|shoulder.length)\b/.test(style)?'short hair':/\bvery long\b/.test(style)?'very long hair':/\bmedium\b/.test(style)?'medium hair':/\b(?:long|waist.length)\b/.test(style)?'long hair':'';
+  if(hairFacet)params.append('hair_color',hairFacet);
+  if(eyeFacet)params.append('eye_color',eyeFacet);
+  if(lengthFacet)params.append('hair_length',lengthFacet);
+  if(character?.gender==='female')params.append('gender','1girl');
+  else if(character?.gender==='male')params.append('gender','1boy');
+  return `https://animadex.net/?${params}`;
+}
 export function prototypeTag(character,backend,model){
   if(backend!=='comfyui'||!/miaomiao|anima/i.test(model||''))return '';
   if(character?.prototypeMode==='none')return '';

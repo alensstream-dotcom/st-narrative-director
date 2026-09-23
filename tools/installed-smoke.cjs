@@ -1,21 +1,35 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
 (async()=>{
   if((process.argv.includes('--profile-roundtrip')||process.argv.includes('--render'))&&process.env.DIRECTOR_TEST_ISOLATED!=='1'){
     throw new Error('Write/render acceptance checks require DIRECTOR_TEST_ISOLATED=1 and an isolated SillyTavern instance');
   }
   const browser=await chromium.launch({channel:'msedge',headless:true});
   try{
-    const page=await browser.newPage({viewport:{width:430,height:900}});
+    const viewportWidth=Number(process.env.DIRECTOR_VIEWPORT_WIDTH||430);
+    const page=await browser.newPage({viewport:{width:viewportWidth,height:900}});
     const errors=[];let pageErrorCount=0;page.on('pageerror',e=>{pageErrorCount++;if(e.stack?.includes('st-narrative-director'))errors.push(e.message);});
     page.on('request',r=>{if(r.url().endsWith('/api/settings/save'))console.log('SETTINGS_REQUEST',r.method());});
     page.on('response',r=>{if(r.url().endsWith('/api/settings/save'))console.log('SETTINGS_RESPONSE',r.status());});
     page.on('console',m=>{if(/Settings not ready/i.test(m.text()))console.log('SETTINGS_NOT_READY');else if(/Error saving settings/i.test(m.text()))console.log('SETTINGS_SAVE_ERROR');});
     const base=process.env.DIRECTOR_ST_URL||'http://localhost:11451';
+    const localAssets=[];
+    await page.route('**/scripts/extensions/third-party/st-narrative-director/**',route=>{
+      const prefix='/scripts/extensions/third-party/st-narrative-director/';
+      const relative=new URL(route.request().url()).pathname.split(prefix)[1];
+      const root=path.resolve(__dirname,'..'),file=path.resolve(root,relative);
+      if(!file.startsWith(root+path.sep)||!fs.existsSync(file))return route.fulfill({status:404,body:'Not found'});
+      localAssets.push(relative);
+      return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.css')?'text/css':'text/javascript'});
+    });
     await page.goto(base,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')],null,{timeout:90000});
     const readiness=await page.evaluate(async()=>{
       const module=await import('/script.js');
+      const started=Date.now();
+      while(!module.settingsReady&&Date.now()-started<60000)await new Promise(resolve=>setTimeout(resolve,100));
       return {ready:module.settingsReady};
     });
     console.log(JSON.stringify({readiness,pageErrorCount}));
@@ -93,6 +107,14 @@ const assert=require('node:assert/strict');
       console.log(JSON.stringify({render:generated,savedImage:true}));
     }
     await page.screenshot({path:'artifacts/installed-settings.png'});
-    console.log(JSON.stringify({installed:result,pluginErrors:errors}));
+    const visual=await page.evaluate(()=>({dialogBackground:getComputedStyle(document.querySelector('.nd-dialog')).backgroundColor,stylesheets:[...document.styleSheets].map(x=>x.href).filter(x=>x?.includes('narrative-director'))}));
+    const panels={api:{overflow:result.horizontalOverflow}};
+    for(const [name,label] of [['render','生图'],['characters','人物'],['tasks','任务']]){
+      await page.getByRole('tab',{name:label,exact:true}).click({force:true});
+      const metrics=await page.locator('.nd-dialog').evaluate(d=>({overflow:d.scrollWidth>d.clientWidth+1,scrollWidth:d.scrollWidth,clientWidth:d.clientWidth}));
+      panels[name]=metrics;
+      await page.screenshot({path:`artifacts/installed-${name}-${viewportWidth}.png`});
+    }
+    console.log(JSON.stringify({installed:result,pluginErrors:errors,visual,localAssets,viewportWidth,panels}));
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

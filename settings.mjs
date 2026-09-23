@@ -1,5 +1,6 @@
 import {el,command,dialog} from './dom.mjs';
 import {MIAOMIAO} from './workflows.mjs';
+import {prototypeSearchUrl} from './prototypes.mjs';
 
 const secretKey=source=>source==='deepseek'?'api_key_deepseek':source==='openai'?'api_key_openai':'api_key_custom';
 const field=(name,input)=>{input.setAttribute('aria-label',name);return el('label',{},name,input);};
@@ -110,7 +111,7 @@ function characterPanel(ui,body,d){
     prototype.disabled=!!character.lock;custom.disabled=!!character.lock;
     prototype.onchange=()=>{customField.hidden=prototype.value!=='custom';if(prototype.value==='custom')return;try{const [mode,id]=prototype.value.split(':');c.setPrototype(character.id,mode,id);status.textContent='视觉原型已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
     custom.onchange=()=>{try{c.setPrototype(character.id,'custom','',custom.value);status.textContent='自定义角色 Tag 已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
-    section.append(field('Anima 视觉原型',prototype),customField,el('small',{text:character.lock?'已锁定；先解除锁定才能换原型':'只匹配已知外貌；服装和动作仍取自当前剧情'}));
+    section.append(field('Anima 视觉原型',prototype),customField,el('div',{class:'nd-actions-inline'},el('a',{href:prototypeSearchUrl(character),target:'_blank',rel:'noopener noreferrer',text:'按当前外观筛选 ANIMADEX'})),el('small',{text:character.lock?'已锁定；先解除锁定才能换原型':'只匹配已知外貌；服装和动作仍取自当前剧情'}));
     const outfits=c.adapter.outfitsForProfile(character.profile),wardrobe=el('details',{},el('summary',{text:`智绘姬服装预设 ${outfits.length}`}));
     for(const outfit of outfits)wardrobe.append(el('div',{class:'nd-profile-row'},el('strong',{text:outfit.nameCN||outfit.nameEN||outfit.id}),el('small',{text:outfit.description||'未填写服装描述'})));
     section.append(wardrobe);

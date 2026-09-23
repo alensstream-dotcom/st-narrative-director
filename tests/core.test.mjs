@@ -14,6 +14,12 @@ test('anchor exact and refuses duplicate',()=>{
   assert.throws(()=>locateQuote(raw+raw,'她穿着白裙站在门口。'));
 });
 test('English-only and bounded prompt',()=>{assert.throws(()=>assertEnglish('beautiful 女孩'));assert.throws(()=>assertEnglish('one '.repeat(250)));});
+test('face visibility defaults to both eyes when its exception has no exact source evidence',()=>{
+  const value=scene();value.shot={face_visibility:'hidden',face_visibility_evidence:'not in source'};
+  const result=validateScene(value,raw,{start:0,end:raw.length},true);
+  assert.equal(result.shot.face_visibility,'both_eyes');
+  assert.equal(result.shot.face_visibility_evidence,'');
+});
 test('anchors survive inline formatting and whitespace without revealing hidden text',()=>{
   const raw='她穿着<span>白色长裙</span>，\n站在门口。';const a=locateQuote(raw,'她穿着白色长裙，站在门口。');assert.ok(validAnchor(raw,a));assert.equal(a.quote,raw);
 });

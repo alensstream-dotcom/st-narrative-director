@@ -8,7 +8,7 @@ export class Controller {
     this.ctx=context;this.tasks=new Map();this.round=null;this.onchange=()=>{};this.notice='';this.epoch=0;this.activeLore=[];
     this.adapter=new ChatuAdapter(context);this.api=new DirectorAPI(context,()=>this.config());
   }
-  config(){const c=this.ctx().extensionSettings[NS] ||= {enabled:false,source:'deepseek',model:'',secretId:'',url:'',autoBackend:'follow',manualBackend:'follow',scopes:{}};c.scopes ||= {};return c;}
+  config(){const c=this.ctx().extensionSettings[NS] ||= {enabled:false,source:'custom',model:'gpt-6-sol',secretId:'',url:'https://api-slb.krill-code.net/v1',credentialMode:'session',autoBackend:'comfyui',manualBackend:'comfyui',scopes:{}};c.scopes ||= {};return c;}
   save(){this.ctx().saveSettingsDebounced();}
   status(text){this.notice=text;this.onchange();}
   chatKey(){const c=this.ctx();return `${c.groupId||c.characters?.[c.characterId]?.avatar||'solo'}::${c.getCurrentChatId?.()||c.chatId||''}`;}
@@ -24,34 +24,45 @@ export class Controller {
     if(!m||(m.swipe_id||0)!==b.swipe||fingerprint(m.mes.slice(0,b.end))!==b.prefix)return null;
     return {message:m,index};
   }
-  historyAt(index,offset){
+  historyAt(index,offset,focus=''){
     const chat=this.ctx().chat;
-    const recent=chat.slice(Math.max(0,index-3),index).filter(m=>!m.is_system).map(m=>narrative(m.mes)).join('\n').slice(-4500);
+    const recent=chat.slice(Math.max(0,index-3),index).filter(m=>!m.is_system).map(m=>narrative(m.mes)).join('\n').slice(-2200);
     const states=[];
     for(let i=0;i<=index;i++)for(const s of chat[i]?.extra?.[NS]?.states||[]){
       if(s.swipe===(chat[i].swipe_id||0)&&(i<index||s.end<=offset)&&fingerprint(chat[i].mes.slice(0,s.end))===s.prefix)states.push(s.value);
     }
-    const contextText=recent+'\n'+narrative(chat[index]?.mes||'').slice(Math.max(0,offset-2500),offset);
+    const before=narrative(chat[index]?.mes||'').slice(Math.max(0,offset-1800),offset);
+    const contextText=recent+'\n'+before+'\n'+narrative(focus).slice(0,1800);
     const relevant=new Set(Object.values(this.scope().characters).filter(c=>[c.name,...(c.aliases||[])].some(n=>n&&contextText.includes(n))).map(c=>c.name));
     const latest=new Map();
     for(const state of states)for(const character of state.characters||[])if(character.name&&relevant.has(character.name)){
       latest.delete(character.name);latest.set(character.name,{...state,characters:[character]});
     }
-    const compressed=[...latest.values()].slice(-12);
-    return {recent:contextText,states:compressed.length?compressed:states.slice(-4)};
+    const compressed=[...latest.values()].slice(-6);
+    const bounded=(compressed.length?compressed:states.slice(-2)).map(s=>({
+      evidence:String(s.evidence||'').slice(-180),
+      characters:(s.characters||[]).slice(-4).map(c=>({name:c.name,outfit:String(c.outfit||'').slice(0,140),location:String(c.location||'').slice(0,100),time:String(c.time||'').slice(0,80),injury:String(c.injury||'').slice(0,80)}))
+    }));
+    return {recent:contextText.slice(-3200),states:bounded};
   }
-  card(){
+  card(relevanceText=''){
     const c=this.ctx().characters?.[this.ctx().characterId];if(!c)return {};
     const d=c.data||c;
-    return {name:d.name,description:String(d.description||c.description||'').slice(0,6000),scenario:String(d.scenario||c.scenario||'').slice(0,1800),
-      lore:(d.character_book?.entries||[]).filter(e=>e.enabled!==false).slice(0,8).map(e=>({keys:e.keys,content:String(e.content||'').slice(0,900)}))};
+    const focus=String(relevanceText).toLowerCase();
+    const lore=(d.character_book?.entries||[]).filter(e=>e.enabled!==false).filter(e=>{
+      const keys=Array.isArray(e.keys)?e.keys:String(e.keys||e.key||'').split(',');
+      return e.constant===true||keys.some(key=>String(key||'').trim().length>1&&focus.includes(String(key).trim().toLowerCase()));
+    }).slice(0,4).map(e=>({keys:e.keys,content:String(e.content||'').slice(0,500)}));
+    return {name:d.name,description:String(d.description||c.description||'').slice(0,2400),scenario:String(d.scenario||c.scenario||'').slice(0,700),lore};
   }
   async analyze(index,raw,start,end,manual,signal,chosen=[]){
-    const binding=this.bind(index,raw,end),epoch=this.epoch;
-    const history=this.historyAt(index,start),selected=raw.slice(start,end),text=selected+history.recent;
+    const binding=this.bind(index,raw,end),epoch=this.epoch,selected=raw.slice(start,end);
+    const history=this.historyAt(index,start,selected),text=selected+history.recent;
     const linked=new Set(Object.values(this.scope().characters).map(c=>c.profile));
-    const profiles=this.adapter.profiles().filter(p=>(p.enabled||linked.has(p.id)||p.directorScope===this.chatKey())&&[p.nameCN,p.nameEN].some(v=>String(v||'').split('|').some(n=>n&&text.includes(n)))).slice(0,12);
-    const registry=Object.values(this.scope().characters).map(c=>({id:c.id,name:c.name,aliases:c.aliases,profile:c.profile,lock:c.lock})).slice(-20);
+    const profiles=this.adapter.profiles().filter(p=>(p.enabled||linked.has(p.id)||p.directorScope===this.chatKey())&&[p.nameCN,p.nameEN].some(v=>String(v||'').split('|').some(n=>n&&text.includes(n)))).slice(0,6)
+      .map(p=>({...p,characterTraits:String(p.characterTraits||'').slice(0,500),facialFeatures:String(p.facialFeatures||'').slice(0,400)}));
+    const registry=Object.values(this.scope().characters).filter(c=>[c.name,...(c.aliases||[])].some(n=>n&&text.includes(n))).slice(-8)
+      .map(c=>({id:c.id,name:c.name,aliases:c.aliases,profile:c.profile,visualFacts:c.visualFacts||{},lock:c.lock?{facts:(c.lock.facts||[]).slice(0,8)}:null,prototypeMode:c.prototypeMode,prototypeId:c.prototypeId,prototypeCustom:c.prototypeCustom}));
     for(const c of Object.values(this.scope().characters)){
       const p=this.adapter.profiles().find(p=>p.id===c.profile);
       if(p&&!profiles.some(x=>x.id===p.id)&&[c.name,...(c.aliases||[])].some(n=>n&&text.includes(n)))profiles.push(p);
@@ -59,10 +70,10 @@ export class Controller {
     const originalOutfits=profiles.map(p=>{
       const linked=this.adapter.outfitsForProfile(p.id);
       const named=linked.filter(o=>[o.nameCN,o.nameEN].some(name=>name&&text.includes(name)));
-      return {profile_ref:p.id,outfits:[...new Map([...named,...linked.slice(-3)].map(o=>[o.id,o])).values()].slice(0,5).map(o=>({id:o.id,nameCN:o.nameCN,nameEN:o.nameEN,description:o.description.slice(0,160),outfit_class:o.directorOutfitClass,outfit_specificity:o.directorOutfitSpecificity}))};
+      return {profile_ref:p.id,outfits:[...new Map([...named,...linked.slice(-3)].map(o=>[o.id,o])).values()].slice(0,3).map(o=>({id:o.id,nameCN:o.nameCN,nameEN:o.nameEN,description:o.description.slice(0,120),outfit_class:o.directorOutfitClass,outfit_specificity:o.directorOutfitSpecificity}))};
     }).filter(p=>p.outfits.length);
     const styleSettings=this.adapter.settings(),style=styleSettings.yushe?.[styleSettings.yusheid_comfyui];
-    const input={mode:manual?'manual':'automatic',CURRENT_TEXT:narrative(selected),PREVIOUS_CONTEXT:history,character_card:this.card(),original_profiles:profiles,original_outfits:originalOutfits,
+    const input={mode:manual?'manual':'automatic',CURRENT_TEXT:narrative(selected),PREVIOUS_CONTEXT:history,character_card:this.card(text),original_profiles:profiles,original_outfits:originalOutfits,
       renderer_style:{prefix:style?.fixedPrompt||'',suffix:style?.fixedPrompt_end||'',rule:'Describe scene content only. Do not override these styles or add style exclusions.'},
       active_lore:this.activeLore,visual_registry:registry,already_chosen:chosen.map(s=>({event_key:s.event_key,moment:s.moment,evidence:s.anchor?.quote||'',action:s.shot?.action||'',essential_visible:s.shot?.essential_visible||[]})),remaining:2-chosen.length};
     const result=await this.api.analyze(input,signal);
@@ -89,8 +100,9 @@ export class Controller {
       if(!character){
         const id=uuid(),matches=this.adapter.profiles().filter(p=>(p.enabled||p.directorScope===this.chatKey())&&[p.nameCN,p.nameEN].some(v=>String(v||'').split('|').some(n=>names.includes(n))));
         const profile=matches.length===1?matches[0].id:this.adapter.upsertProfile(id,cast.name,'',undefined,this.chatKey());
-        character=registry[id]={id,name:cast.name,aliases:cast.aliases||[],profile,lock:null,created:Date.now()};
+        character=registry[id]={id,name:cast.name,aliases:cast.aliases||[],gender:cast.gender||'unknown',profile,lock:null,created:Date.now()};
       }
+      if(cast.gender&&cast.gender!=='unknown')character.gender=cast.gender;
       character.aliases=[...new Set([...(character.aliases||[]),...(cast.aliases||[])])];
       for(const fixed of character.lock?.facts||[]){
         const proposed=facts.find(f=>f.field===fixed.field);
@@ -134,7 +146,22 @@ export class Controller {
     const negative=[snapshot.negative,scene.baseNegative||(scene.basePositive?'':scene.negative),'text, lettering, speech balloons'].filter(Boolean).flatMap(x=>x.split(',').map(tag=>tag.trim()).filter(Boolean));
     const character=scene.cast?.length===1?this.scope().characters[scene.cast[0].character_id]:null;
     const tag=prototypeTag(character,snapshot.backend,snapshot.model);
-    return {positive:join([snapshot.prefix,tag?`1girl, ${tag}`:'',scene.basePositive||scene.positive,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag};
+    const anima=snapshot.backend==='comfyui'&&/miaomiao|anima/i.test(snapshot.model||'');
+    const faceEvidence=String(scene.shot?.face_visibility_evidence||'');
+    const explicitFaceException=scene.shot?.face_visibility!=='both_eyes'&&faceEvidence.length>=4&&String(scene.anchor?.quote||'').includes(faceEvidence);
+    const faceLock=anima&&scene.subject!=='environment'&&scene.cast?.some(c=>c.is_subject!==false)&&!explicitFaceException;
+    let content=scene.basePositive||scene.positive;
+    const cameraShot=faceLock&&/\b(?:camera|photograph)\b/i.test(content);
+    if(faceLock)content=content.replace(/\b(?:three-quarter view|front view|profile view|profile|side view|rear view|back view|from behind|both eyes visible|one eye hidden|hidden face|obstructed face)\b/gi,' ')
+      .replace(/\band an unobstructed face\b/gi,' ')
+      .replace(/\s+/g,' ').replace(/\s+([,.;])/g,'$1').replace(/^[\s,.;]+|[\s,.;]+$/g,'');
+    if(faceLock)negative.push('profile','side view','from behind','back view','hidden face','one eye hidden');
+    if(cameraShot){
+      content=content.replace(/\b(?:raised|lifted)\s+((?:silver|digital|film|compact)\s+)?camera\b/gi,'$1camera held at chest height')
+        .replace(/\b(?:raises?|lifts?)\s+(?:her\s+)?((?:silver|digital|film|compact)\s+)?camera\b/gi,'holds $1camera at chest height');
+      negative.push('camera covering face','camera blocking eyes','camera covering nose or mouth','camera above chin','camera at eye level','viewfinder shot','monitor','screen','inset photograph');
+    }
+    return {positive:join([snapshot.prefix,tag?`1girl, ${tag}`:'',faceLock?'front view, both eyes visible, unobstructed face':'',cameraShot?'camera at chest height below the chin; her entire face, including nose and mouth, remains unobstructed':'',content,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag,faceLock};
   }
   enqueue(binding,scene,origin,snapshot){
     if(!this.resolve(binding))throw new Error('原文已改变，任务未提交');

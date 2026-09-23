@@ -47,6 +47,7 @@ export class UI {
       }catch(e){if(token!==refreshToken)return;snapshot=null;confirm.disabled=true;model.textContent=e.message;this.error(e);}};
       backend.onchange=()=>{remember();void refresh();};workflow.onchange=()=>{remember();void refresh();};
       confirm=command('image','确认生成',()=>{try{if(!snapshot)throw new Error('请先选择可用生图后端');this.c.enqueue(result.binding,{...scene,basePositive:scene.basePositive||scene.positive,baseNegative:scene.baseNegative||(previous?'':scene.negative),positive:assertEnglish(positive.value),negative:assertEnglish(negative.value),prototypeTag:prompts.prototypeTag},'manual',snapshot);d.close();}catch(e){this.error(e);}},'确认生成');
+      confirm.classList.add('nd-primary');
       const quote=el('blockquote',{text:narrative(scene.anchor.quote).trim()});
       const castLine=el('p',{class:'nd-status',text:scene.cast.map(x=>`${x.name} · ${x.outfit||'服装未明确'} · 智绘姬 ${x.profile_ref||'待关联'}`).join('；')});
       if(result.scenes.length>1){const moments=el('select',{},...result.scenes.map((candidate,i)=>el('option',{value:String(i),text:candidate.moment})));moments.onchange=()=>{remember();sceneIndex=Number(moments.value);scene=result.scenes[sceneIndex];quote.textContent=narrative(scene.anchor.quote).trim();info.textContent=scene.moment;void refresh();};body.append(el('label',{},'选择要画的瞬间',moments));}
@@ -110,9 +111,9 @@ export class UI {
     (document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings')||document.body).append(entry);
     document.addEventListener('selectionchange',()=>{
       const next=selectionSnapshot(this.c.ctx());if(!next)return;this.selection=next;
-      if(!this.toolbar){this.toolbar=el('div',{class:'nd-selection'},command('image','生成图片',()=>{
+      if(!this.toolbar){const generate=command('image','生成图片',()=>{
         const selected=this.selection;this.toolbar?.remove();this.toolbar=null;if(selected)void this.preview(selected);
-      },'生成图片'));document.body.append(this.toolbar);}
+      },'生成图片');generate.classList.add('nd-primary');this.toolbar=el('div',{class:'nd-selection'},generate);document.body.append(this.toolbar);}
       const v=window.visualViewport;this.toolbar.style.left=`${Math.max(8,Math.min(next.rect.left,(v?.width||innerWidth)-150))}px`;
       this.toolbar.style.top=`${Math.max(8,Math.min(next.rect.bottom+10,(v?.height||innerHeight)-64))}px`;
     });

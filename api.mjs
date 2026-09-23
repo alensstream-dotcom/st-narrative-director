@@ -13,7 +13,13 @@ export class DirectorAPI {
     const r = await fetch(path,{method:'POST',headers:this.context().getRequestHeaders(),body:JSON.stringify(body),signal});
     if (!r.ok) { const e=new Error(this.errorMessage(r.status)); e.status=r.status; e.retryAfter=Number(r.headers.get('retry-after')) || 2; throw e; }
     const value=await r.json();
-    if (value.error) {const status=Number(value.status||value.error?.status||value.error?.code)||0;const e=new Error(this.errorMessage(status));e.status=status;throw e;}
+    if (value.error||value.quota_error) {
+      const detail=String(typeof value.error==='string'?value.error:value.error?.message||value.error?.type||value.quota_error?.message||'');
+      const encoded=JSON.stringify(value.quota_error||'');
+      const status=Number(value.status||value.error?.status||value.error?.code||value.quota_error?.status||value.quota_error?.code)
+        ||(/gateway\s+time[- ]?out|upstream.{0,20}timeout/i.test(detail)?504:/quota|rate limit|too many requests/i.test(detail+' '+encoded)?429:0);
+      const e=new Error(this.errorMessage(status));e.status=status;e.retryAfter=Number(r.headers.get('retry-after'))||2;throw e;
+    }
     return value;
   }
   connection(requireModel=true) {
@@ -29,7 +35,7 @@ export class DirectorAPI {
     return {chat_completion_source:c.source,model:c.model,secret_id:c.secretId,
       ...(c.source==='custom' ? {custom_url:this.endpoint(),custom_include_headers:''} : {})};
   }
-  errorMessage(status){return status===401||status===403?'密钥或访问权限验证失败。可以直接修改密钥后重试。':status===429?'服务限流或额度不足，请稍后重试或检查余额。':status===404?'接口地址或模型不存在，请检查 API 地址与模型。':`导演服务请求失败${status?'（HTTP '+status+'）':''}，请检查地址、模型、密钥和网络。`;}
+  errorMessage(status){return status===401||status===403?'密钥或访问权限验证失败。可以直接修改密钥后重试。':status===429?'服务限流或额度不足，请稍后重试或检查余额。':status===404?'接口地址或模型不存在，请检查 API 地址与模型。':status>=502&&status<=504?'导演 API 中转网关暂时超时或不可用；分析会进行一次短暂重试，未成功时不会提交图片。':`导演服务请求失败${status?'（HTTP '+status+'）':''}，请检查地址、模型、密钥和网络。`;}
   async testConnection(signal){
     const result=await this.post('/api/backends/chat-completions/generate',{...this.connection(),messages:[{role:'user',content:'Reply with OK.'}],stream:false,max_tokens:16,temperature:0},signal||AbortSignal.timeout(30000));
     if(!result.choices?.length)throw new Error('服务未返回有效聊天响应');return true;
@@ -46,16 +52,17 @@ export class DirectorAPI {
     const connection=this.connection();
     for(let attempt=0;attempt<3;attempt++) {
       try {
-        const timeout=AbortSignal.timeout(90000);
+        const timeout=AbortSignal.timeout(45000);
         const result=await this.post('/api/backends/chat-completions/generate',{
-          ...connection,stream:false,temperature:0.2,max_tokens:3200,
+          ...connection,stream:false,temperature:0.2,max_tokens:input.mode==='manual'?2100:1500,
           ...(/^gpt-6-(?:sol|astra|luna)$/i.test(connection.model)?{reasoning_effort:'minimal'}:{}),
           messages:[{role:'system',content:DIRECTOR_SYSTEM},{role:'user',content:JSON.stringify(input)}],
           json_schema:{name:'scene_director',strict:false,value:DIRECTOR_SCHEMA}
         },signal ? AbortSignal.any([signal,timeout]) : timeout);
         return {...parseJson(result.choices?.[0]?.message?.content),analysisMs:Math.round(performance.now()-start)};
       } catch(e) {
-        if(signal?.aborted || attempt===2 || ![429,502,503,504].includes(e.status)) throw e;
+        const exhausted=e.status===504?attempt>=1:attempt>=2;
+        if(signal?.aborted || exhausted || ![429,502,503,504].includes(e.status)) throw e;
         await new Promise((resolve,reject)=>{
           const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve();},Math.min(12000,(e.retryAfter || 2)*1000*2**attempt));
           const abort=()=>{clearTimeout(timer);reject(signal.reason);}; signal?.addEventListener('abort',abort,{once:true});

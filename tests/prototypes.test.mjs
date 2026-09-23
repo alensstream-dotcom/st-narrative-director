@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {prototypeCandidates,prototypeTag} from '../prototypes.mjs';
+import {prototypeCandidates,prototypeSearchUrl,prototypeTag} from '../prototypes.mjs';
 const facts=(hair,eyes,style,feature='')=>[
   {field:'hair_color',value:hair},{field:'eye_color',value:eyes},
   {field:'hair_style',value:style},{field:'distinctive_features',value:feature}
@@ -19,4 +19,11 @@ test('prototype tag is limited to the matching renderer and can be turned off',(
   assert.match(prototypeTag(character,'comfyui','miaomiaoHarem_29BBETA10.safetensors'),/violet evergarden/);
   assert.equal(prototypeTag(character,'banana','miaomiaoHarem_29BBETA10.safetensors'),'');
   character.prototypeMode='none';assert.equal(prototypeTag(character,'comfyui','miaomiaoHarem_29BBETA10.safetensors'),'');
+});
+test('AnimaDex search link uses known appearance facets without querying during generation',()=>{
+  const url=new URL(prototypeSearchUrl({gender:'female',visualFacts:{hair_color:'silver',eye_color:'green',hair_style:'shoulder-length short hair'}}));
+  assert.equal(url.origin,'https://animadex.net');assert.equal(url.searchParams.get('mode'),'characters');
+  assert.equal(url.searchParams.get('hair_color'),'silver hair');assert.equal(url.searchParams.get('eye_color'),'green eyes');
+  assert.equal(url.searchParams.get('hair_length'),'short hair');assert.equal(url.searchParams.get('gender'),'1girl');
+  const sparse=new URL(prototypeSearchUrl({visualFacts:{}}));assert.equal(sparse.search,'?mode=characters');
 });
