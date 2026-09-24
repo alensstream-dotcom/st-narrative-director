@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Controller} from '../controller.mjs';
-import {NS,locateQuote} from '../core.mjs';
+import {NS,locateQuote,narrative} from '../core.mjs';
 function setup(){
   const context={chat:[{mes:'艾琳穿着白裙站在门口。',swipe_id:0}],chatId:'a',characters:[{avatar:'a.png'}],characterId:0,extensionSettings:{'st-chatu8':{characterPresets:{}}},saveChat:async()=>{},saveSettingsDebounced:()=>{}};
   return {context,c:new Controller(()=>context)};
@@ -11,6 +11,27 @@ test('stable binding rejects swipe, deleted/replaced message, chat change and so
   assert.ok(c.resolve(b));context.chat[0].swipe_id=1;assert.equal(c.resolve(b),null);context.chat[0].swipe_id=0;
   context.chatId='b';assert.equal(c.resolve(b),null);context.chatId='a';context.chat[0].mes=raw.replace('白裙','黑裙');assert.equal(c.resolve(b),null);
   context.chat[0]={mes:raw,swipe_id:0};assert.equal(c.resolve(b),null);
+});
+test('automatic binding follows a unique exact quote when streaming rewrites the message prefix',()=>{
+  const {context,c}=setup(),raw='A woman waits beside the iron gate.',binding=c.bind(0,raw,raw.length,'beside the iron gate.');
+  context.chat[0].mes=`rewritten header. ${raw}`;
+  const target=c.resolve(binding);
+  assert.ok(target);assert.equal(target.anchor.quote,'beside the iron gate.');assert.equal(target.anchor.start,'rewritten header. '.length+raw.indexOf('beside the iron gate.'));
+  context.chat[0].mes+=` Then beside the iron gate.`;
+  assert.equal(c.resolve(binding),null);
+});
+test('automatic analysis reanchors a grounded result after the live assistant prefix is rewritten',async()=>{
+  const {context,c}=setup(),raw='Opening scene. '.repeat(24),evidence='Satan opens the iron gate.';
+  context.chat[0].mes=raw;
+  const scene={evidence,moment:evidence,event_key:'gate-open',phase:'happening',score:.95,uncertain:false,subject:'characters',cast:[],shot:{action:evidence,essential_visible:['gate'],face_visibility:'both_eyes',face_visibility_evidence:''},positive:'front view, both eyes visible, and an unobstructed face. A woman opens the iron gate.',negative:'text, watermark',audit:{grounded:true,one_moment:true,no_invented_dialogue:true}};
+  c.api.analyze=async()=>{
+    context.chat[0].mes=`Revised response header. ${raw} ${evidence}`;
+    return {scenes:[scene],state_updates:[],analysisMs:1};
+  };
+  const result=await c.analyze(0,raw,0,raw.length,false,new AbortController().signal);
+  assert.equal(result.scenes.length,1);
+  assert.equal(result.scenes[0].anchor.quote,evidence);
+  assert.equal(result.scenes[0].anchor.start,context.chat[0].mes.indexOf(evidence));
 });
 test('metadata never changes story text',()=>{const {context,c}=setup(),before=context.chat[0].mes;c.bind(0,before,before.length);assert.equal(context.chat[0].mes,before);assert.ok(context.chat[0].extra[NS].id);});
 test('Chatu setup adds a dedicated preset and uses the workflow UNet as the actual model',()=>{
@@ -49,8 +70,27 @@ test('final automatic fallback sends one grounded prompt when earlier chunks had
   await c.pump(c.round);
   assert.deepEqual(sent,['only']);assert.equal(c.round.budget.accepted.length,1);
 });
+test('final fallback waits until newly streamed text has been analyzed',async()=>{
+  const {context,c}=setup(),sent=[],modes=[];
+  context.chat[0].mes='opening '.repeat(20);c.config().enabled=true;
+  c.adapter.promptStyle=()=>({backend:'comfyui',model:'miaomiaoHarem_29BBETA10.safetensors',prefix:'',suffix:'',negative:''});
+  c.analyze=async(index,raw,start,end,mode)=>{
+    modes.push(mode);
+    if(modes.length===1){context.chat[0].mes+='new scene '.repeat(30);c.round.final=true;return {scenes:[]};}
+    return mode==='fallback'?{scenes:[{event_key:'tail',score:.8,anchor:locateQuote(raw,raw,start,end),positive:'A woman in a white dress at the doorway.',negative:'text',cast:[]}]}:{scenes:[]};
+  };
+  c.issuePrompt=async(binding,scene)=>{sent.push(scene.event_key);return {};};
+  c.startRound('normal',{},false);const round=c.round;
+  await c.pump(round);
+  assert.deepEqual(modes,[false]);assert.deepEqual(sent,[]);assert.equal(round.finalProcessed,false);
+  clearTimeout(round.timer);round.timer=null;
+  await c.pump(round);
+  assert.deepEqual(modes,[false,false,'fallback']);assert.deepEqual(sent,['tail']);
+  assert.ok(round.cursor>=narrative(context.chat[0].mes).trimEnd().length);
+});
 test('new installs default to the user-selected auxiliary API and keep auto generation disabled',()=>{
   const {c}=setup(),config=c.config();assert.equal(config.source,'custom');assert.equal(config.model,'gpt-6-sol');
+  assert.equal(config.streamModel,'gpt-6-sol');
   assert.equal(config.url,'https://api-slb.krill-code.net/v1');assert.equal(config.credentialMode,'session');assert.equal(config.enabled,false);
 });
 test('redraw and backend changes do not accumulate renderer styles',()=>{
@@ -93,6 +133,16 @@ test('director-owned profile fills new facts and preserves later user edits',()=
   s.characterPresets[id].characterTraits='User edited, do not replace';
   assert.equal(c.adapter.syncOwnedFacts(id,'character-a',[{field:'face',value:'round',evidence:'圆脸'}]).reason,'user-edited');
   assert.equal(s.characterPresets[id].characterTraits,'User edited, do not replace');
+});
+test('deleted Chatu profiles are recreated before clothing sync',async()=>{
+  const {context,c}=setup(),raw='Erin wears a dark coat at the iron gate.';context.chat[0].mes=raw;
+  c.scope().characters.erin={id:'erin',name:'Erin',aliases:[],profile:'deleted-profile',lock:null,visualFacts:{}};
+  const cast={name:'Erin',aliases:[],gender:'female',fixed_facts:[],outfit:'dark coat',outfit_evidence:'wears a dark coat'};
+  const scene={cast:[cast],positive:'A woman in a dark coat stands at an iron gate.',negative:'text',anchor:locateQuote(raw,raw)};
+  c.prepareCharacters(scene,{CURRENT_TEXT:raw,PREVIOUS_CONTEXT:{recent:'',states:[]}});
+  assert.notEqual(cast.profile_ref,'deleted-profile');assert.ok(c.adapter.profile(cast.profile_ref));
+  const record=await c.issuePrompt(c.bind(0,raw,raw.length),scene,'manual',scene.positive);
+  assert.ok(record);assert.equal(c.adapter.outfitsForProfile(cast.profile_ref).length,1);
 });
 test('model fixed-fact field names persist as stable character memory',()=>{
   const {context,c}=setup(),raw='艾琳有银色长发和绿色眼睛。';context.chat[0].mes=raw;
@@ -228,27 +278,105 @@ test('manual quota is independent and cancelled queued task cannot complete',asy
   const task=c.enqueue(b,scene,'manual',{backend:'comfyui'});c.cancel(task);finish({imageId:'/x.png'});await new Promise(r=>setTimeout(r,10));
   assert.equal(task.state,'cancelled');assert.equal(c.meta(context.chat[0]).images.length,0);
 });
-test('reserved second scene is submitted after the reply ends',async()=>{
+test('a second automatic scene is not submitted after the reply ends once one prompt was sent mid-stream',async()=>{
   const {context,c}=setup(),first='窗边阳光照亮空旷的车站大厅。'.repeat(8)+'艾琳举起银色相机拍了一张照片。',second='外面突然下起大雨，车站门口的石阶闪着水光。'.repeat(8)+'艾琳撑开一把鲜红的雨伞。';
   context.chat[0].mes=first;c.config().enabled=true;
   const sent=[];
-  c.analyze=async(index,raw,start,end)=>({scenes:[{event_key:start?'umbrella':'camera',score:.9,anchor:locateQuote(raw,start?second.slice(-14):first.slice(-16),start,end),positive:'A woman with an object.',negative:'text'}]});
+  const later='A single red umbrella opens at the door.';
+  c.analyze=async(index,raw,start,end)=>({scenes:[{event_key:end>first.length?'umbrella':'camera',score:.9,anchor:locateQuote(raw,end>first.length?later:first.slice(-16),start,end),positive:'A woman with an object.',negative:'text'}]});
   c.adapter.promptStyle=()=>({backend:'comfyui',prefix:'',suffix:'',negative:'',model:'test'});
   c.issuePrompt=async(binding,scene)=>{sent.push(scene.event_key);return {}};
   c.startRound('normal',{},false);const round=c.round;
   await c.pump(round);assert.deepEqual(sent,['camera']);
-  context.chat[0].mes+=second;round.lastCall=0;
+  context.chat[0].mes+=second.repeat(2)+later;round.lastCall=0;
   await c.pump(round);assert.deepEqual(sent,['camera']);assert.equal(round.pending.length,1);
-  round.final=true;await c.pump(round);assert.deepEqual(sent,['camera','umbrella']);
+  round.final=true;await c.pump(round);assert.deepEqual(sent,['camera']);assert.equal(round.pending.length,0);assert.equal(round.finalProcessed,true);
 });
-test('a complete short scene starts analysis before the reply ends',async()=>{
+test('automatic analysis waits for enough grounded stream text, then starts before the reply ends',async()=>{
   const {context,c}=setup();
-  const raw='艾琳走进大厅，抬头望向窗边。她举起银色相机，对着站台拍下照片。';
-  context.chat[0].mes=raw;c.config().enabled=true;
+  context.chat[0].mes='<dream_body>A</dream_body>';c.config().enabled=true;
   let calls=0;c.analyze=async()=>{calls++;return {scenes:[]};};
   c.startRound('normal',{},false);
   await c.pump(c.round);
+  assert.equal(calls,0);
+  context.chat[0].mes='<dream_body>'+('撒旦转身走向门口，抬起斧柄，火光落在墙上。').repeat(6)+'</dream_body>';
+  await c.pump(c.round);
   assert.equal(calls,1);assert.equal(c.round.final,false);
+});
+
+test('a reply ending during a streaming request cannot deliver a second late scene',async()=>{
+  const {context,c}=setup();context.chat[0].mes='A woman stands by the gate. Later she opens the door.';c.config().enabled=true;
+  const raw=context.chat[0].mes,sent=[];
+  c.adapter.promptStyle=()=>({backend:'test',prefix:'',suffix:'',negative:'',model:'test'});
+  c.issuePrompt=async(_binding,scene)=>{sent.push(scene.event_key);return {};};
+  c.analyze=async(_index,_raw,_start,_end,_manual,_signal,_chosen,early)=>{
+    await early({event_key:'gate',score:.98,anchor:locateQuote(raw,'A woman stands by the gate.'),positive:'A woman at a gate.',negative:'text',cast:[]});
+    c.round.final=true;
+    return {scenes:[{event_key:'door',score:.99,anchor:locateQuote(raw,'Later she opens the door.'),positive:'A woman opens a door.',negative:'text',cast:[]}]};
+  };
+  c.startRound('normal',{},false);await c.pump(c.round);
+  assert.deepEqual(sent,['gate']);assert.equal(c.round.finalProcessed,true);
+});
+test('a chained generation start does not abort a final reply still awaiting director analysis',async()=>{
+  const {context,c}=setup(),raw='Satan lowers her axe beside the iron gate.',sent=[];
+  context.chat[0].mes=raw;c.config().enabled=true;
+  c.adapter.promptStyle=()=>({backend:'comfyui',model:'miaomiaoHarem_29BBETA10.safetensors',prefix:'',suffix:'',negative:''});
+  c.analyze=async()=>({scenes:[{event_key:'satan-axe',score:.94,anchor:locateQuote(raw,raw),positive:'front view, both eyes visible, and an unobstructed face. Satan lowers her axe beside the iron gate.',negative:'text',cast:[]}]});
+  c.issuePrompt=async(_binding,scene)=>{sent.push(scene.event_key);return {};};
+  c.startRound('normal',{},false);const finishing=c.round;finishing.final=true;
+  const analysis=c.pump(finishing);
+  assert.equal(finishing.busy,true);assert.ok(finishing.messageId);
+  c.startRound('normal',{},false);
+  assert.equal(finishing.abort.signal.aborted,false);
+  assert.equal(c.finishingRounds.has(finishing),true);
+  await analysis;
+  assert.deepEqual(sent,['satan-axe']);
+  assert.equal(c.finishingRounds.has(finishing),false);
+});
+test('hidden reasoning length does not satisfy the initial visible-story threshold',async()=>{
+  const {context,c}=setup();
+  context.chat[0].mes=`<think>${'private '.repeat(1000)}</think><dream_body>A</dream_body>`;
+  c.config().enabled=true;
+  let calls=0;c.analyze=async()=>{calls++;return {scenes:[]};};
+  c.startRound('normal',{},false);
+  await c.pump(c.round);
+  assert.equal(calls,0);
+  context.chat[0].mes=context.chat[0].mes.replace('</dream_body>','BCDEFGHIJKLMNOP</dream_body>');
+  await c.pump(c.round);
+  assert.equal(calls,1);
+  assert.equal(c.round.final,false);
+});
+
+test('reasoning-only stream is not analyzed as story when ST promotes it at the end',()=>{
+  const {context,c}=setup();c.config().enabled=true;c.startRound('normal',{},false);
+  c.onToken('');context.chat[0].mes='A draft scene from exhausted internal reasoning.';
+  c.endRound();assert.equal(c.round.failed,true);assert.equal(c.round.finalProcessed,true);
+  assert.match(c.notice,/没有输出可见剧情/);assert.equal(c.round.timer,null);
+});
+test('an ungrounded automatic scene is skipped without failing the live generation round',async()=>{
+  const {context,c}=setup(),raw=context.chat[0].mes;
+  c.api.analyze=async()=>({scenes:[{evidence:'a scene that is not in the reply',moment:'invented',event_key:'invented',phase:'happening',score:.99,uncertain:false,subject:'environment',cast:[],positive:'A quiet stone hall.',negative:'text',audit:{grounded:true,one_moment:true,no_invented_dialogue:true}}],state_updates:[]});
+  const result=await c.analyze(0,raw,0,raw.length,false,new AbortController().signal);
+  assert.deepEqual(result.scenes,[]);
+  assert.equal(context.chat[0].mes,raw);
+});
+test('early streamed candidates anchor to newly arrived story text and bind the live prefix',async()=>{
+  const {context,c}=setup();
+  context.chat[0].mes='opening '.repeat(20);c.config().enabled=true;
+  c.adapter.promptStyle=()=>({backend:'comfyui',model:'miaomiaoHarem_29BBETA10.safetensors',prefix:'',suffix:'',negative:''});
+  c.api.analyze=async(input,signal,onEarlyScene)=>{
+    assert.equal(input.CURRENT_TEXT.length,159);
+    const arrival=setTimeout(()=>{context.chat[0].mes='rewritten prefix. '+context.chat[0].mes+'Satan opens the iron gate.';},120);
+    await onEarlyScene({evidence:'Satan opens the iron gate.',positive:'front view, both eyes visible, and an unobstructed face. Satan opens the iron gate.',negative:'text, watermark',score:.96,uncertain:false,subject:'characters'});
+    clearTimeout(arrival);
+    return {scenes:[],state_updates:[],analysisMs:1};
+  };
+  c.startRound('normal',{},false);const round=c.round;
+  await c.pump(round);
+  const record=c.meta(context.chat[0]).prompts[0];
+  assert.ok(record);assert.equal(record.origin,'automatic');assert.equal(record.anchor.quote,'Satan opens the iron gate.');
+  assert.ok(c.resolve(record.binding));assert.equal(round.budget.accepted.length,1);
+  clearTimeout(round.timer);round.timer=null;
 });
 test('inactive same-name profile does not cross chat identity; lock follows confirmed facts',()=>{
   const {context,c}=setup();context.extensionSettings['st-chatu8'].characterPresets.old={nameCN:'艾琳',characterTraits:'purple eyes, long hair'};
@@ -257,4 +385,30 @@ test('inactive same-name profile does not cross chat identity; lock follows conf
   c.toggleLock({scene,imageId:'/image.png'},cast);
   const lock=c.scope().characters[cast.character_id].lock;assert.match(lock.traits,/green/);assert.doesNotMatch(lock.traits,/purple/);
   assert.equal(context.extensionSettings['st-chatu8'].characterPresets.old.characterTraits,'purple eyes, long hair');
+});
+
+test('known female early shot is accepted and later cast/outfit metadata enriches the same image',async()=>{
+  const {context,c}=setup(),raw=context.chat[0].mes;
+  c.scope().characters.erin={id:'erin',name:'艾琳',aliases:[],gender:'female',profile:'erin-profile',visualFacts:{},lock:null};
+  context.extensionSettings['st-chatu8'].characterPresets['erin-profile']={nameCN:'艾琳',nameEN:'Erin'};
+  c.config().enabled=true;
+  c.adapter.promptStyle=()=>({backend:'comfyui',model:'anima',prefix:'',suffix:'',negative:''});
+  c.api.analyze=async(input,signal,early)=>{
+    assert.equal(input.visual_registry[0].gender,'female');
+    const partial={evidence:raw,positive:'A woman in a white dress stands at the doorway.',negative:'text',score:.96,uncertain:false,subject:'characters'};
+    assert.equal(await early(partial),true);
+    assert.equal(c.meta(context.chat[0]).prompts.length,1);
+    return {scenes:[{...partial,moment:'Erin at the door',event_key:'door',phase:'static',cast:[{name:'艾琳',aliases:[],gender:'female',is_subject:true,fixed_facts:[],outfit:'white dress',outfit_evidence:'白裙',outfit_class:'dress',outfit_specificity:'specified'}],audit:{grounded:true,one_moment:true,no_invented_dialogue:true}}],state_updates:[]};
+  };
+  c.startRound('normal',{},false);
+  await c.analyze(0,raw,0,raw.length,false,c.round.abort.signal,[],async scene=>{
+    await c.issuePrompt(c.bind(0,raw,scene.anchor.end,scene.anchor.quote),scene,'automatic',scene.positive);
+    return true;
+  });
+  const records=c.meta(context.chat[0]).prompts;
+  assert.equal(records.length,1);
+  assert.equal(records[0].scene.cast[0].character_id,'erin');
+  assert.ok(records[0].scene.cast[0].outfit_ref);
+  assert.equal(records[0].scene.metadataPending,undefined);
+  assert.equal(records[0].state,'issued');
 });

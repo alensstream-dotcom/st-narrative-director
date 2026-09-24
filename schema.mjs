@@ -13,3 +13,18 @@ const scene=object({
   audit:object({grounded:boolean,one_moment:boolean,no_invented_dialogue:boolean})
 });
 export const DIRECTOR_SCHEMA=object({scenes:array(scene),state_updates:array(object({evidence:text,characters:array(object({name:text,outfit:text,location:text,time:text,injury:text}))}))});
+
+const automaticScene=object({
+  evidence:text,positive:text,score:{type:'number'},uncertain:boolean,subject:{type:'string',enum:['characters','environment']},negative:text,
+  cast:array(object({name:text,aliases:array(text),gender:{type:'string',enum:['female','male','unknown']},is_subject:boolean,
+    outfit:text,outfit_evidence:text,outfit_class:text,outfit_specificity:{type:'string',enum:['generic','specified','unknown']},
+    fixed_facts:array(fact)})),
+});
+export const AUTO_DIRECTOR_SCHEMA=object({scenes:array(automaticScene),state_updates:array(object({evidence:text,characters:array(object({name:text,outfit:text,location:text,time:text,injury:text}))}))});
+
+const streamingScene=object({
+  evidence:text,score:{type:'number'},uncertain:boolean,subject:{type:'string',enum:['characters','environment']},positive:text,negative:text,
+  cast:array(object({name:text,aliases:array(text),gender:{type:'string',enum:['female','male','unknown']},is_subject:boolean,outfit:text,outfit_evidence:text,
+    outfit_class:text,outfit_specificity:{type:'string',enum:['generic','specified','unknown']},fixed_facts:array(fact)})),
+});
+export const AUTO_STREAM_SCHEMA=object({scenes:array(streamingScene),state_updates:array(object({evidence:text,characters:array(object({name:text,outfit:text,location:text,time:text,injury:text}))}))});

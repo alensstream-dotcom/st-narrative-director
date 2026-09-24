@@ -19,7 +19,7 @@ const { chromium } = require('playwright');
       return {
         user: { handle: user.handle, name: user.name },
         availableUsers: Array.isArray(users) ? users.map(x => ({ handle: x.handle, name: x.name })) : [],
-        director: { enabled: c.enabled, source: c.source, model: c.model, credentialMode: c.credentialMode, secretId: c.secretId, autoBackend: c.autoBackend, comfyWorkflow: c.comfyWorkflow },
+        director: { enabled: c.enabled, source: c.source, model: c.model, streamModel: c.streamModel, credentialMode: c.credentialMode, secretId: c.secretId, autoBackend: c.autoBackend, comfyWorkflow: c.comfyWorkflow },
         savedKeyLabels: Object.fromEntries(Object.entries(keyList).filter(([k, v]) => k.startsWith('api_key_') && Array.isArray(v)).map(([k, v]) => [k, v.map(x => ({ id: x.id, label: x.label, active: x.active }))])),
         chatu: { mode: s.mode, client: s.client, workerid: s.workerid, workerNames: Object.keys(s.workers || {}), loaders, MODEL_NAME: s.MODEL_NAME,
           comfyuiUrl: s.comfyuiUrl, steps: s.comfyui_steps, cfg: s.cfg_comfyui, sampler: s.comfyuisamplerName, scheduler: s.comfyui_scheduler,

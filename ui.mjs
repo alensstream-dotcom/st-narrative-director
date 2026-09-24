@@ -86,7 +86,12 @@ export class UI {
       const message=chat[index],root=document.querySelector(`.mes[mesid="${index}"] .mes_text`);
       if(!root)continue;
       for(const record of message.extra?.[NS]?.prompts||[]){
-        if(!this.c.resolve(record.binding)||!validAnchor(message.mes,record.anchor)){
+        const target=this.c.resolve(record.binding);
+        if(target?.anchor&&(target.anchor.start!==record.anchor.start||target.anchor.end!==record.anchor.end)){
+          record.anchor=target.anchor;
+          void context.saveChat();
+        }
+        if(!target||!validAnchor(message.mes,record.anchor)){
           root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();
           continue;
         }
