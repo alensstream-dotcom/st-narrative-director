@@ -20,6 +20,7 @@ const story='艾琳经过车站大厅。\n\n她在门口撑起一把红伞，抬
     await page.waitForTimeout(3000);
     await page.evaluate(async story=>{
       const {controller:c}=globalThis[Symbol.for('st.narrative-director.debug.v1')],ctx=c.ctx();
+      globalThis.__ndOriginalAuto=c.adapter.settings().zidongdianji;
       c.adapter.settings().zidongdianji='false';
       const index=ctx.chat.length;
       ctx.chat.push({mes:story,is_user:false,is_system:false,extra:{}});
@@ -58,8 +59,13 @@ const story='艾琳经过车站大厅。\n\n她在门口撑起一把红伞，抬
         const index=ctx.chat.findIndex(m=>m.mes===story&&m.extra?.narrative_director_v1?.prompts?.some(p=>p.origin==='manual'));
         if(index>=0){ctx.chat.splice(index,1);await ctx.saveChat();}
         document.querySelector('#nd-manual-test')?.remove();
+        if(globalThis.__ndOriginalAuto!==undefined){
+          ctx.extensionSettings['st-chatu8'].zidongdianji=globalThis.__ndOriginalAuto;
+          ctx.saveSettingsDebounced();
+        }
       },story);}catch{}
     }
+    await new Promise(resolve=>setTimeout(resolve,2000));
     await browser.close();
   }
 })().catch(e=>{console.error(e);process.exitCode=1;});

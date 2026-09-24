@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
     await page.waitForTimeout(2500);
     const initial = await page.evaluate(async () => {
       const { controller: c, ui } = globalThis[Symbol.for('st.narrative-director.debug.v1')];
+      globalThis.__ndOriginalAuto=c.adapter.settings().zidongdianji;
       c.adapter.settings().zidongdianji = 'false';
       const ctx = c.ctx(), text = '艾琳走进车站大厅，朝我微笑。\n\n她举起红色雨伞，站在门口。', index = ctx.chat.length;
       const message = { mes: text, is_user: false, is_system: false, extra: {} };
@@ -54,8 +55,13 @@ const assert = require('node:assert/strict');
         const index=ctx.chat.findIndex(m=>m.mes==='艾琳走进车站大厅，朝我微笑。\n\n她举起红色雨伞，站在门口。'&&m.extra?.narrative_director_v1?.prompts?.some(p=>p.id==='nd-dom-1'));
         if(index>=0){ctx.chat.splice(index,1);await ctx.saveChat();}
         document.querySelector('#nd-dom-test')?.remove();
+        if(globalThis.__ndOriginalAuto!==undefined){
+          ctx.extensionSettings['st-chatu8'].zidongdianji=globalThis.__ndOriginalAuto;
+          ctx.saveSettingsDebounced();
+        }
       });}catch{}
     }
+    await new Promise(resolve=>setTimeout(resolve,2000));
     await browser.close();
   }
 })().catch(e => { console.error(e); process.exitCode = 1; });
