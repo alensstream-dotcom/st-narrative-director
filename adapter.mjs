@@ -1,5 +1,5 @@
 import { clone, freeze, fingerprint, NS } from './core.mjs';
-import {pairedWorkflow} from './workflows.mjs';
+import {pairedWorkflow,MIAOMIAO} from './workflows.mjs';
 
 export function materialize(workflow, variables) {
   function visit(value) {
@@ -20,6 +20,61 @@ export class ChatuAdapter {
   #info=new Map();
   constructor(context){this.context=context;}
   settings(){const s=this.context().extensionSettings['st-chatu8'];if(!s)throw new Error('请先安装并配置原版智绘姬');return s;}
+  imageTags(){
+    const s=this.settings();
+    const startTag=String(s.startTag||'image###'),endTag=String(s.endTag||'###');
+    if(!startTag||!endTag||startTag===endTag)throw new Error('智绘姬图片标记设置无效');
+    return {startTag,endTag};
+  }
+  requestId(prompt){
+    let hash=0;
+    for(let i=0;i<prompt.length;i++)hash=(hash<<5)-hash+prompt.charCodeAt(i)|0;
+    return 'chatu8-id-'+Math.abs(hash).toString(36);
+  }
+  promptStyle(){
+    const s=this.settings();
+    let graph;
+    try{graph=JSON.parse(s.worker||s.workers?.[s.workerid]||'{}');}catch{graph={};}
+    const loader=Object.values(graph).find(node=>node.class_type==='UNETLoader'||node.class_type==='CheckpointLoaderSimple');
+    return {backend:'comfyui',model:String(loader?.inputs?.unet_name||loader?.inputs?.ckpt_name||s.MODEL_NAME||MIAOMIAO.model),prefix:'',suffix:'',negative:''};
+  }
+  static configuredKeys=['mode','client','comfyuiUrl','startTag','endTag','MODEL_NAME','comfyui_steps','cfg_comfyui','comfyuisamplerName','comfyui_scheduler','comfyui_width','comfyui_height','comfyui_vae','comfyuiCLIPName','zidongdianji','zidongdianji2','autoLLMImageGen','enablePregen','imageGenInterval','workerid','worker','yusheid_comfyui'];
+  configureChatu(url='http://127.0.0.1:8188'){
+    const s=this.settings(),workflow=JSON.stringify(MIAOMIAO.workflow,null,2);
+    const director=this.context().extensionSettings[NS] ||= {};
+    director.chatuRestore ||= Object.fromEntries(ChatuAdapter.configuredKeys.filter(key=>key in s).map(key=>[key,clone(s[key])]));
+    s.workers ||= {};
+    const base='叙景 Miaomiao Harem';
+    let preset=base,number=2;
+    while(s.workers[preset]){
+      let existing;
+      try{existing=typeof s.workers[preset]==='string'?JSON.parse(s.workers[preset]):s.workers[preset];}catch{existing=null;}
+      if(JSON.stringify(existing)===JSON.stringify(MIAOMIAO.workflow))break;
+      preset=`${base} (${number++})`;
+    }
+    s.workers[preset] ||= workflow;
+    s.workerid=preset;s.worker=s.workers[preset];
+    s.yushe ||= {};
+    const styleName='叙景 英文动漫';
+    s.yushe[styleName] ||= {fixedPrompt:'masterpiece, best quality, anime illustration',fixedPrompt_end:'',negativePrompt:'text, lettering, speech balloons, watermark, low quality, bad anatomy, bad hands, extra fingers'};
+    s.yusheid_comfyui=styleName;
+    Object.assign(s,{mode:'comfyui',client:'jiuguan',comfyuiUrl:url,startTag:'image###',endTag:'###',
+      MODEL_NAME:MIAOMIAO.model,comfyui_steps:String(MIAOMIAO.parameters.steps),cfg_comfyui:String(MIAOMIAO.parameters.cfg),
+      comfyuisamplerName:MIAOMIAO.parameters.sampler,comfyui_scheduler:MIAOMIAO.parameters.scheduler,
+      comfyui_width:String(MIAOMIAO.parameters.width),comfyui_height:String(MIAOMIAO.parameters.height),
+      comfyui_vae:'qwen_image_vae.safetensors',comfyuiCLIPName:'qwen_3_06b_base.safetensors',
+      zidongdianji:'true',zidongdianji2:'false',autoLLMImageGen:'false',enablePregen:'false',imageGenInterval:'100'});
+    this.context().saveSettingsDebounced();
+    return {preset,model:MIAOMIAO.model,url:s.comfyuiUrl,steps:s.comfyui_steps,client:s.client,autoClick:s.zidongdianji};
+  }
+  restoreChatu(){
+    const director=this.context().extensionSettings[NS],backup=director?.chatuRestore;
+    if(!backup)throw new Error('没有可恢复的智绘姬配置');
+    const settings=this.settings();
+    for(const [key,value] of Object.entries(backup))settings[key]=clone(value);
+    delete director.chatuRestore;
+    this.context().saveSettingsDebounced();
+  }
   async inspectComfy(){
     const url=this.settings().comfyuiUrl?.replace(/\/$/,'');if(!url)return;
     if(this.#info.has(url))return this.#info.get(url);

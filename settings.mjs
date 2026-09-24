@@ -1,5 +1,4 @@
 import {el,command,dialog} from './dom.mjs';
-import {MIAOMIAO} from './workflows.mjs';
 import {prototypeSearchUrl} from './prototypes.mjs';
 
 const secretKey=source=>source==='deepseek'?'api_key_deepseek':source==='openai'?'api_key_openai':'api_key_custom';
@@ -9,7 +8,7 @@ export function openSettings(ui,initial='connection'){
   const {dialog:d,body}=dialog('叙景 · 导演控制台'),c=ui.c;
   const nav=el('div',{class:'nd-tabs',role:'tablist','aria-label':'导演设置'}),content=el('div',{class:'nd-panel',role:'tabpanel'});
   body.append(nav,content);
-  const views={connection:['API',()=>connectionPanel(ui,content,d)],render:['生图',()=>renderPanel(ui,content)],characters:['人物',()=>characterPanel(ui,content,d)],tasks:['任务',()=>taskPanel(ui,content)]};
+  const views={connection:['API',()=>connectionPanel(ui,content,d)],render:['生图',()=>renderChatuPanel(ui,content)],characters:['人物',()=>characterPanel(ui,content,d)],tasks:['任务',()=>taskPanel(ui,content)]};
   const choose=id=>{
     for(const button of nav.children){const active=button.dataset.tab===id;button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;}
     content.replaceChildren();views[id][1]();
@@ -67,20 +66,36 @@ function connectionPanel(ui,body,d){
   modeState();void refreshSecrets().catch(e=>result.textContent=e.message);
 }
 
-function renderPanel(ui,body){
-  const c=ui.c.config();
-  body.append(el('h4',{text:'自动与手动'}),el('label',{class:'nd-toggle'},el('input',{type:'checkbox',checked:c.enabled,onchange:e=>{c.enabled=e.target.checked;ui.c.save();if(!c.enabled&&ui.c.round)ui.c.round.abort.abort();}}),'自动导演 · 每轮最多两张'));
-  try{
-    const auto=ui.backendSelect(c.autoBackend),manual=ui.backendSelect(c.manualBackend);
-    auto.onchange=()=>{c.autoBackend=auto.value;ui.c.save();};manual.onchange=()=>{c.manualBackend=manual.value;ui.c.save();};
-    const workflow=el('select',{},el('option',{value:MIAOMIAO.id,text:MIAOMIAO.name}),el('option',{value:'chatu',text:'智绘姬当前工作流'}));workflow.value=c.comfyWorkflow||MIAOMIAO.id;workflow.onchange=()=>{c.comfyWorkflow=workflow.value;ui.c.save();};
-    const status=el('p',{class:'nd-status',role:'status'}),check=command('stethoscope','检查生图连接',async()=>{
-      check.disabled=true;status.textContent='检查中…';try{const info=await ui.c.adapter.inspectComfy();if(!info)throw new Error('无法连接 ComfyUI');const s=ui.c.adapter.snapshot('comfyui');status.textContent=`已连接 · ${s.model} · ${s.workflow} · ${info._viaProxy?'酒馆代理':'直连'}`;}catch(e){status.textContent=e.message;}finally{check.disabled=false;}
-    },'检查连接');
-    body.append(field('自动后端',auto),field('手动后端',manual),field('默认工作流',workflow),check,status);
-    const caps=ui.c.adapter.capabilities();if(caps.conflicts.length)body.append(el('p',{class:'nd-notice',text:`智绘姬另有自动功能开启：${caps.conflicts.join(', ')}`}));
-    body.append(el('dl',{class:'nd-facts'},el('dt',{text:'人物资料'}),el('dd',{text:'智绘姬原始档案，按人物 ID 关联'}),el('dt',{text:'生图执行'}),el('dd',{text:'独立任务快照，不改智绘姬全局配置'}),el('dt',{text:'参考能力'}),el('dd',{text:'当前配套工作流：固定外貌描述；未启用人脸参考分支'})));
-  }catch(e){body.append(el('p',{class:'nd-notice',text:e.message}));}
+function renderChatuPanel(ui,body){
+  const c=ui.c.config(),adapter=ui.c.adapter;
+  const enabled=el('input',{type:'checkbox',checked:c.enabled});
+  enabled.onchange=()=>{c.enabled=enabled.checked;ui.c.save();if(!c.enabled&&ui.c.round)ui.c.round.abort.abort();};
+  const status=el('p',{class:'nd-status',role:'status'});
+  const describe=()=>{
+    try{
+      const s=adapter.settings();
+      const checks=[s.startTag==='image###'&&s.endTag==='###',String(s.zidongdianji)==='true',String(s.zidongdianji2)!=='true',s.mode==='comfyui',s.client==='jiuguan',String(s.workerid||'').startsWith('叙景 Miaomiao Harem')];
+      status.textContent=checks.every(Boolean)
+        ?`智绘姬已就绪 · ${s.workerid} · ${adapter.promptStyle().model} · ${s.comfyuiUrl}`
+        :'智绘姬尚未使用配套设置；应用后会保留已有预设和人物档案。';
+    }catch(e){status.textContent=e.message;}
+  };
+  const apply=command('sliders','应用智绘姬配套设置',()=>{
+    try{const info=adapter.configureChatu();restore.disabled=false;describe();status.textContent=`已应用 · ${info.preset} · ${info.model} · ${info.url}`;}
+    catch(e){status.textContent=e.message;}
+  },'应用配套设置');apply.classList.add('nd-primary');
+  const restore=command('clock-rotate-left','恢复应用前设置',()=>{
+    try{adapter.restoreChatu();restore.disabled=true;describe();status.textContent='已恢复应用前的智绘姬设置';}
+    catch(e){status.textContent=e.message;}
+  },'恢复原设置');restore.disabled=!c.chatuRestore;
+  const check=command('plug','检查 ComfyUI',async()=>{
+    check.disabled=true;status.textContent='正在连接 ComfyUI…';
+    try{const info=await adapter.inspectComfy();if(!info)throw new Error('ComfyUI 未响应');status.textContent=`已连接 · ${adapter.settings().MODEL_NAME} · ${info._viaProxy?'酒馆代理':'直连'}`;}
+    catch(e){status.textContent=e.message;}finally{check.disabled=false;}
+  },'检查连接');
+  body.append(el('h4',{text:'生图链路'}),el('label',{class:'nd-toggle'},enabled,'自动选镜头 · 每轮最多两张，尽量至少一张'),
+    el('div',{class:'nd-actions-inline'},apply,check,restore),status);
+  describe();
 }
 
 function taskPanel(ui,body){

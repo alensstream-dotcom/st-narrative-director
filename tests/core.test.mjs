@@ -8,6 +8,13 @@ test('reasoning and buttons excluded without moving narrative offsets',()=>{
   const text='<think>秘密</think>正文<button>继续</button><analysis>未结束';
   const clean=narrative(text);assert.equal(clean.length,text.length);assert.ok(!clean.includes('秘密'));assert.ok(!clean.includes('继续'));assert.ok(clean.includes('正文'));assert.ok(!clean.includes('未结束'));
 });
+test('existing Chatu markers do not leak prompt text into story analysis',()=>{
+  const text='她走进大厅。image###front view, one woman in a station###她抬起头。';
+  const clean=narrative(text);
+  assert.equal(clean.length,text.length);
+  assert.ok(!clean.includes('front view'));
+  assert.ok(clean.includes('她抬起头。'));
+});
 test('completed sentence boundaries',()=>{assert.equal(completeEnd('她站起来。接着'),5);assert.equal(completeEnd('未完'),0);});
 test('anchor exact and refuses duplicate',()=>{
   const a=locateQuote(raw,'她穿着白裙站在门口。');assert.ok(validAnchor(raw,a));assert.ok(!validAnchor(raw.replace('白裙','黑裙'),a));

@@ -1,5 +1,5 @@
 import {narrative} from './core.mjs';
-const EXCLUDE='button, a, input, select, textarea, script, style, details, .mes_reasoning, .nd-image, .nd-tools, .st-chatu8-image-container, [hidden], [aria-hidden="true"]';
+const EXCLUDE='button, a, input, select, textarea, script, style, details, .mes_reasoning, .nd-image, .nd-tools, .nd-chatu-prompt, .st-chatu8-image-container, [hidden], [aria-hidden="true"]';
 export function textNodes(root) {
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(node) {
     if(!node.textContent?.trim() || node.parentElement?.closest(EXCLUDE)) return NodeFilter.FILTER_REJECT;

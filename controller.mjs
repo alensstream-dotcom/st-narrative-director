@@ -13,7 +13,7 @@ export class Controller {
   status(text){this.notice=text;this.onchange();}
   chatKey(){const c=this.ctx();return `${c.groupId||c.characters?.[c.characterId]?.avatar||'solo'}::${c.getCurrentChatId?.()||c.chatId||''}`;}
   scope(){return this.config().scopes[this.chatKey()] ||= {characters:{}};}
-  meta(message){message.extra ||= {};return message.extra[NS] ||= {id:uuid(),images:[],states:[]};}
+  meta(message){message.extra ||= {};const meta=message.extra[NS] ||= {id:uuid(),images:[],states:[],prompts:[]};meta.prompts ||= [];return meta;}
   bind(index,raw,end){
     const m=this.ctx().chat[index];if(!m)throw new Error('原消息已不存在');
     return {chat:this.chatKey(),message:this.meta(m).id,swipe:m.swipe_id||0,prefix:fingerprint(raw.slice(0,end)),end};
@@ -56,6 +56,7 @@ export class Controller {
     return {name:d.name,description:String(d.description||c.description||'').slice(0,2400),scenario:String(d.scenario||c.scenario||'').slice(0,700),lore};
   }
   async analyze(index,raw,start,end,manual,signal,chosen=[]){
+    const fallback=manual==='fallback',isManual=manual===true;
     const binding=this.bind(index,raw,end),epoch=this.epoch,selected=raw.slice(start,end);
     const history=this.historyAt(index,start,selected),text=selected+history.recent;
     const linked=new Set(Object.values(this.scope().characters).map(c=>c.profile));
@@ -73,12 +74,12 @@ export class Controller {
       return {profile_ref:p.id,outfits:[...new Map([...named,...linked.slice(-3)].map(o=>[o.id,o])).values()].slice(0,3).map(o=>({id:o.id,nameCN:o.nameCN,nameEN:o.nameEN,description:o.description.slice(0,120),outfit_class:o.directorOutfitClass,outfit_specificity:o.directorOutfitSpecificity}))};
     }).filter(p=>p.outfits.length);
     const styleSettings=this.adapter.settings(),style=styleSettings.yushe?.[styleSettings.yusheid_comfyui];
-    const input={mode:manual?'manual':'automatic',CURRENT_TEXT:narrative(selected),PREVIOUS_CONTEXT:history,character_card:this.card(text),original_profiles:profiles,original_outfits:originalOutfits,
+    const input={mode:fallback?'automatic_final_fallback':isManual?'manual':'automatic',CURRENT_TEXT:narrative(selected),PREVIOUS_CONTEXT:history,character_card:this.card(text),original_profiles:profiles,original_outfits:originalOutfits,
       renderer_style:{prefix:style?.fixedPrompt||'',suffix:style?.fixedPrompt_end||'',rule:'Describe scene content only. Do not override these styles or add style exclusions.'},
       active_lore:this.activeLore,visual_registry:registry,already_chosen:chosen.map(s=>({event_key:s.event_key,moment:s.moment,evidence:s.anchor?.quote||'',action:s.shot?.action||'',essential_visible:s.shot?.essential_visible||[]})),remaining:2-chosen.length};
     const result=await this.api.analyze(input,signal);
     if(epoch!==this.epoch||!this.resolve(binding))throw new Error('分析期间原文已改变');
-    const scenes=result.scenes.slice(0,manual?3:2).map(s=>validateScene(s,raw,{start,end},manual)).filter(Boolean);
+    const scenes=result.scenes.slice(0,fallback?1:isManual?3:2).map(s=>validateScene(s,raw,{start,end},manual)).filter(Boolean);
     const m=this.ctx().chat[index];
     for(const state of result.state_updates.slice(0,12)){
       try{
@@ -161,7 +162,39 @@ export class Controller {
         .replace(/\b(?:raises?|lifts?)\s+(?:her\s+)?((?:silver|digital|film|compact)\s+)?camera\b/gi,'holds $1camera at chest height');
       negative.push('camera covering face','camera blocking eyes','camera covering nose or mouth','camera above chin','camera at eye level','viewfinder shot','monitor','screen','inset photograph');
     }
-    return {positive:join([snapshot.prefix,tag?`1girl, ${tag}`:'',faceLock?'front view, both eyes visible, unobstructed face':'',cameraShot?'camera at chest height below the chin; her entire face, including nose and mouth, remains unobstructed':'',content,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag,faceLock};
+    return {positive:join([snapshot.prefix,tag?`${character?.gender==='male'?'1boy':'1girl'}, ${tag}`:'',faceLock?'front view, both eyes visible, unobstructed face':'',cameraShot?'camera at chest height below the chin; her entire face, including nose and mouth, remains unobstructed':'',content,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag,faceLock};
+  }
+  async issuePrompt(binding,scene,origin,positive){
+    const target=this.resolve(binding);
+    if(!target||!validAnchor(target.message.mes,scene.anchor))throw new Error('原文已经改变，请重新选择剧情');
+    const prompt=assertEnglish(positive);
+    const {startTag,endTag}=this.adapter.imageTags();
+    if(prompt.includes(startTag)||prompt.includes(endTag))throw new Error('提示词包含智绘姬标记，请修改后重试');
+    const meta=this.meta(target.message);
+    const duplicate=meta.prompts.find(p=>p.anchor.fingerprint===scene.anchor.fingerprint&&p.prompt===prompt&&p.state!=='failed');
+    if(duplicate)return duplicate;
+    for(const cast of scene.cast||[]){
+      if(cast.character_id&&cast.profile_ref&&cast.outfit_grounded){
+        cast.outfit_ref=this.adapter.upsertOutfit(cast.character_id,cast.profile_ref,cast.name,cast.outfit,this.chatKey(),cast.outfit_class,cast.outfit_specificity);
+      }
+    }
+    const record={id:uuid(),binding:clone(binding),anchor:clone(scene.anchor),scene:clone(scene),prompt,origin,state:'issued',created:Date.now()};
+    meta.prompts.push(record);
+    await this.ctx().saveChat();
+    this.onPromptIssued?.(record);
+    this.status(`已向智绘姬交付提示词 ${meta.prompts.length} 条`);
+    return record;
+  }
+  onChatuResult(result){
+    if(!result?.id)return;
+    let changed=false;
+    for(const message of this.ctx().chat){
+      for(const record of message.extra?.[NS]?.prompts||[]){
+        if(!this.resolve(record.binding)||this.adapter.requestId(record.prompt)!==result.id||record.state==='done')continue;
+        record.state=result.success?'done':'failed';record.detail=result.success?'':String(result.error||'生图失败').slice(0,160);changed=true;
+      }
+    }
+    if(changed){this.status(result.success?'智绘姬已完成生图':`智绘姬生图失败：${String(result.error||'未知错误').slice(0,120)}`);void this.ctx().saveChat();}
   }
   enqueue(binding,scene,origin,snapshot){
     if(!this.resolve(binding))throw new Error('原文已改变，任务未提交');
@@ -204,7 +237,7 @@ export class Controller {
   startRound(type,options,dryRun){
     if(dryRun||['quiet','impersonate'].includes(type))return;
     if(this.round){this.round.abort.abort();clearTimeout(this.round.timer);}
-    this.round={budget:new AutoBudget(),pending:[],messageId:null,cursor:type==='continue'?(this.ctx().chat.at(-1)?.mes.length||0):0,final:false,busy:false,failed:false,lastCall:0,abort:new AbortController()};
+    this.round={budget:new AutoBudget(),pending:[],messageId:null,cursor:type==='continue'?(this.ctx().chat.at(-1)?.mes.length||0):0,final:false,finalProcessed:false,busy:false,failed:false,fallbackTried:false,lastCall:0,abort:new AbortController()};
   }
   onToken(text){
     const r=this.round;if(!this.config().enabled||!r||typeof text!=='string')return;
@@ -215,7 +248,7 @@ export class Controller {
     const index=r.messageId?this.ctx().chat.findIndex(m=>m.extra?.[NS]?.id===r.messageId):this.ctx().chat.length-1,m=this.ctx().chat[index];if(!m||m.is_user||m.is_system)return;
     r.messageId=this.meta(m).id;
     const raw=m.mes||'',end=completeEnd(narrative(raw),r.final);
-    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length)||end-r.cursor<28&&!r.final)return;
+    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length&&!(r.final&&!r.finalProcessed))||end-r.cursor<28&&!r.final)return;
     if(!r.final&&Date.now()-r.lastCall<7000){r.timer=setTimeout(()=>{r.timer=null;void this.pump(r);},1500);return;}
     r.busy=true;r.lastCall=Date.now();this.status('导演正在旁路分析');
     try{
@@ -229,18 +262,30 @@ export class Controller {
       for(const candidate of [...r.pending]){
         const {scene,binding}=candidate;
         if(r.budget.canAccept(scene,r.final)){
-          await this.adapter.inspectComfy();
-          const snapshot=this.adapter.snapshot(this.config().autoBackend),prompts=this.effective(scene,snapshot);
+          const prompts=this.effective(scene,this.adapter.promptStyle());
           scene.basePositive ||=scene.positive;scene.baseNegative ||=scene.negative;scene.prototypeTag=prompts.prototypeTag;
           scene.positive=assertEnglish(prompts.positive);scene.negative=assertEnglish(prompts.negative);
           if(r!==this.round||r.abort.signal.aborted)return;
-          this.enqueue(binding,scene,'automatic',snapshot);
+          await this.issuePrompt(binding,scene,'automatic',scene.positive);
           r.budget.accept(scene,r.final);r.pending=r.pending.filter(x=>x!==candidate);
         }
       }
+      if(r.final&&!r.budget.accepted.length&&!r.fallbackTried&&raw.trim()){
+        r.fallbackTried=true;this.status('本轮尚无画面，正在补选一个有原文依据的镜头');
+        const fallback=await this.analyze(index,raw,0,raw.length,'fallback',r.abort.signal);
+        const scene=fallback.scenes[0];
+        if(scene&&r===this.round&&!r.abort.signal.aborted&&this.config().enabled){
+          const prompts=this.effective(scene,this.adapter.promptStyle());
+          scene.basePositive ||=scene.positive;scene.baseNegative ||=scene.negative;scene.prototypeTag=prompts.prototypeTag;
+          scene.positive=assertEnglish(prompts.positive);scene.negative=assertEnglish(prompts.negative);
+          await this.issuePrompt(this.bind(index,raw,scene.anchor.end),scene,'automatic',scene.positive);
+          r.budget.accept(scene,true);
+        }
+      }
+      if(r.final)r.finalProcessed=true;
       this.status(`本轮自动镜头 ${r.budget.accepted.length}/2`);
     }catch(e){if(!r.abort.signal.aborted){r.failed=true;this.status(e.message);}}
-    finally{r.busy=false;if(r===this.round&&!r.failed&&!r.abort.signal.aborted&&r.cursor<(this.ctx().chat[index]?.mes.length||0))r.timer=setTimeout(()=>{r.timer=null;void this.pump(r);},1200);}
+    finally{r.busy=false;if(r===this.round&&!r.failed&&!r.abort.signal.aborted&&(r.cursor<(this.ctx().chat[index]?.mes.length||0)||r.final&&!r.finalProcessed))r.timer=setTimeout(()=>{r.timer=null;void this.pump(r);},1200);}
   }
   retryAnalysis(){if(!this.round)throw new Error('本轮分析已结束，请手动选择需要的片段');this.round.failed=false;void this.pump(this.round);}
   endRound(){const r=this.round;if(r){r.final=true;setTimeout(()=>void this.pump(r),300);}}

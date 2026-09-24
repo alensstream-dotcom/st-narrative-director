@@ -13,6 +13,42 @@ test('stable binding rejects swipe, deleted/replaced message, chat change and so
   context.chat[0]={mes:raw,swipe_id:0};assert.equal(c.resolve(b),null);
 });
 test('metadata never changes story text',()=>{const {context,c}=setup(),before=context.chat[0].mes;c.bind(0,before,before.length);assert.equal(context.chat[0].mes,before);assert.ok(context.chat[0].extra[NS].id);});
+test('Chatu setup adds a dedicated preset and uses the workflow UNet as the actual model',()=>{
+  const {context,c}=setup(),s=context.extensionSettings['st-chatu8'];
+  s.workers={original:'{"kept":true}'};s.workerid='original';s.worker=s.workers.original;s.yushe={original:{fixedPrompt:'keep'}};
+  const configured=c.adapter.configureChatu();
+  assert.equal(s.workers.original,'{"kept":true}');assert.equal(s.yushe.original.fixedPrompt,'keep');
+  assert.equal(s.workerid,configured.preset);assert.equal(s.client,'jiuguan');
+  assert.equal(s.zidongdianji,'true');assert.equal(s.zidongdianji2,'false');
+  s.MODEL_NAME='wrong-checkpoint.safetensors';
+  assert.equal(c.adapter.promptStyle().model,'miaomiaoHarem_29BBETA10.safetensors');
+  assert.equal(c.adapter.configureChatu().preset,configured.preset);
+  c.adapter.restoreChatu();
+  assert.equal(s.workerid,'original');assert.equal(s.worker,'{"kept":true}');
+  assert.equal(c.config().chatuRestore,undefined);
+});
+test('issuing an English prompt preserves story text and tracks Chatu completion',async()=>{
+  const {context,c}=setup(),raw=context.chat[0].mes,binding=c.bind(0,raw,raw.length);
+  const scene={anchor:locateQuote(raw,raw),cast:[],moment:'Erin at the doorway'};
+  const activated=[];c.onPromptIssued=record=>activated.push(record.id);
+  const record=await c.issuePrompt(binding,scene,'manual','front view, one woman in a white dress at the doorway');
+  assert.equal(context.chat[0].mes,raw);assert.equal(record.state,'issued');
+  assert.equal(c.meta(context.chat[0]).prompts.length,1);
+  assert.equal((await c.issuePrompt(binding,scene,'manual',record.prompt)).id,record.id);
+  assert.deepEqual(activated,[record.id]);
+  c.onChatuResult({id:c.adapter.requestId(record.prompt),success:true});
+  assert.equal(record.state,'done');
+});
+test('final automatic fallback sends one grounded prompt when earlier chunks had none',async()=>{
+  const {context,c}=setup(),raw=context.chat[0].mes,sent=[];
+  c.config().enabled=true;
+  c.analyze=async(index,text,start,end,mode)=>({scenes:mode==='fallback'?[{event_key:'only',score:0.7,anchor:locateQuote(text,text,start,end),positive:'One woman in a white dress at a doorway.',negative:'text',cast:[]}]:[]});
+  c.adapter.promptStyle=()=>({backend:'comfyui',model:'miaomiaoHarem_29BBETA10.safetensors',prefix:'',suffix:'',negative:''});
+  c.issuePrompt=async(binding,scene)=>{sent.push(scene.event_key);return {}};
+  c.startRound('normal',{},false);c.round.final=true;
+  await c.pump(c.round);
+  assert.deepEqual(sent,['only']);assert.equal(c.round.budget.accepted.length,1);
+});
 test('new installs default to the user-selected auxiliary API and keep auto generation disabled',()=>{
   const {c}=setup(),config=c.config();assert.equal(config.source,'custom');assert.equal(config.model,'gpt-6-sol');
   assert.equal(config.url,'https://api-slb.krill-code.net/v1');assert.equal(config.credentialMode,'session');assert.equal(config.enabled,false);
@@ -197,8 +233,8 @@ test('reserved second scene is submitted after the reply ends',async()=>{
   context.chat[0].mes=first;c.config().enabled=true;
   const sent=[];
   c.analyze=async(index,raw,start,end)=>({scenes:[{event_key:start?'umbrella':'camera',score:.9,anchor:locateQuote(raw,start?second.slice(-14):first.slice(-16),start,end),positive:'A woman with an object.',negative:'text'}]});
-  c.adapter.inspectComfy=async()=>({});c.adapter.snapshot=()=>({backend:'comfyui',prefix:'',suffix:'',negative:'',model:'test'});
-  c.enqueue=(binding,scene)=>{sent.push(scene.event_key);return {}};
+  c.adapter.promptStyle=()=>({backend:'comfyui',prefix:'',suffix:'',negative:'',model:'test'});
+  c.issuePrompt=async(binding,scene)=>{sent.push(scene.event_key);return {}};
   c.startRound('normal',{},false);const round=c.round;
   await c.pump(round);assert.deepEqual(sent,['camera']);
   context.chat[0].mes+=second;round.lastCall=0;

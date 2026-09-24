@@ -371,6 +371,30 @@
   box-shadow: 0 2px 9px #0005;
 }
 
+.nd-chatu-prompt {
+  display: block;
+  max-width: 100%;
+  margin: 10px 0 16px;
+  overflow-wrap: anywhere;
+}
+
+.nd-chatu-prompt .st-chatu8-image-container {
+  max-width: 100%;
+}
+
+.nd-tools {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 100%;
+  margin: 6px 0 0;
+}
+
+.nd-tools .nd-command {
+  min-width: 38px;
+  min-height: 36px;
+  padding: 6px 9px;
+}
+
 .nd-image {
   display: block;
   clear: both;

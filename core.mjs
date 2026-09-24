@@ -20,7 +20,7 @@ export function narrative(raw) {
   for (const tag of ['think', 'thinking', 'analysis', 'reasoning', 'details', 'script', 'style', 'button', 'select', 'textarea']) {
     s = s.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?(?:<\\/${tag}\\s*>|$)`, 'gi'), blank);
   }
-  return s.replace(/<!--[\s\S]*?(?:-->|$)/g, blank).replace(/```[\s\S]*?(?:```|$)/g, blank).replace(/<[^>]*>/g, blank);
+  return s.replace(/<!--[\s\S]*?(?:-->|$)/g, blank).replace(/```[\s\S]*?(?:```|$)/g, blank).replace(/image###[\s\S]*?(?:###|$)/gi, blank).replace(/<[^>]*>/g, blank);
 }
 export function completeEnd(text, final = false) {
   if (final) return text.length;
@@ -47,12 +47,14 @@ export function assertEnglish(text) {
   return text.trim();
 }
 export function validateScene(scene, raw, range, manual = false) {
+  const fallback = manual === 'fallback';
   const anchor = locateQuote(raw, scene.evidence, range.start, range.end);
   if (!scene.moment || !scene.event_key || !Array.isArray(scene.cast) || scene.cast.length > 6) throw new Error('导演输出缺少镜头结构');
   if (!['happening', 'completed', 'static'].includes(scene.phase)) throw new Error('动作尚未发生或未确定');
   if (scene.audit?.grounded !== true || scene.audit?.one_moment !== true || scene.audit?.no_invented_dialogue !== true) throw new Error('导演自检未通过');
   if (!manual && (scene.score < 0.8 || scene.uncertain === true)) return null;
   if (!manual && scene.cast.length && !scene.cast.some(c => c.gender === 'female') && scene.subject !== 'environment') return null;
+  if (fallback && scene.uncertain === true) return null;
   if (scene.subject === 'environment' && scene.cast.some(c => c.is_subject !== false)) return null;
   for (const c of scene.cast) {
     if (!c.name || !Array.isArray(c.fixed_facts)) throw new Error('人物身份或外貌证据不完整');
@@ -114,8 +116,10 @@ export const DIRECTOR_SYSTEM = `You are a grounded visual-scene director, not a 
 
 SOURCE: Depict actions only from CURRENT_TEXT; each evidence value must be an exact contiguous quote. PREVIOUS_CONTEXT, card, lore, profiles, and registry may resolve identity or earlier state, never add an event to draw. Do not show future, imagined, negated, interrupted, or inferred actions. Manual: return one scene for one moment, or up to three distinct choices in story order for multiple moments. Automatic: return 0-2 clear, high-value completed moments; skip uncertainty and repeated continuations already in already_chosen. Automatic scenes must have a female subject or be environment-only; never disguise a male subject as scenery.
 
+AUTOMATIC_FINAL_FALLBACK: This mode is used only if the entire reply produced no image prompt. Return exactly one grounded scene whenever CURRENT_TEXT offers any visible character, speaker, action, or established location. Prefer the strongest completed visual moment; a speaking character or static establishing shot is acceptable when no action occurs. A male-only shot is allowed here to meet the one-image minimum. Quote a unique span of CURRENT_TEXT, never invent visual facts, and return zero scenes only when even a grounded static shot is impossible.
+
 IDENTITY: Respect user locks first, then relevant card/profile facts; explicit CURRENT_TEXT overrides stale traits. A name alone is not a visual identity tag. fixed_facts field names are exactly hair_color, hair_style, eye_color, face, build, distinctive_features; values must be English with exact source evidence. These are stable traits only, never clothes, pose, mood, or place. Outfit must be evidenced for that story time in CURRENT_TEXT, prior state, or card; a wardrobe preset alone is not evidence. Unknown outfit is empty. Distinguish generic clothing type from specified design; reuse its general class, never copy a prior variant. State updates must be certain and evidence-quoted.
 
-SHOT: Show one instant. Preserve the defining action, essential props, contact, positions, and object state. For every character-led shot, default shot.face_visibility to both_eyes and frame a front view with both eyes unobstructed, even when the character's gaze is directed elsewhere. Gaze direction does not imply a profile or back view. Use partial/hidden only when CURRENT_TEXT explicitly requires it, and quote that exact phrase in face_visibility_evidence; otherwise leave the evidence empty. A character turning back should remain body-three-quarter, not mostly back-facing. Choose a crop that shows the face and essential action/props together. Put action and subject-object relation first, then stable traits, evidenced current outfit, place, time, and light. Keep each character's facts assigned correctly. Dialogue may inform expression/gesture only; never invent, translate, or render dialogue, text, lettering, captions, panels, or speech balloons.
+SHOT: Show one instant. Preserve the defining action, essential props, contact, positions, and object state. For every character-led shot, default shot.face_visibility to both_eyes and frame a front view with both eyes unobstructed, even when the character's gaze is directed elsewhere. Gaze direction does not imply a profile or back view. Use partial/hidden only when CURRENT_TEXT explicitly requires it, and quote that exact phrase in face_visibility_evidence; otherwise leave the evidence empty. A character turning back should remain body-three-quarter, not mostly back-facing. Choose a crop that shows the face and essential action/props together. Put action and subject-object relation first, then stable traits, evidenced current outfit, place, time, and light. Keep each character's facts assigned correctly. Garments are worn normally and cover the torso unless CURRENT_TEXT explicitly specifies exposure; do not add revealing details. Dialogue may inform expression/gesture only; never invent, translate, or render dialogue, text, lettering, captions, panels, or speech balloons.
 
 PROMPT: positive and negative must be ASCII English. When face_visibility is both_eyes, start the positive with front view, both eyes visible, and an unobstructed face; do not add profile, side, or rear framing. Add looking at viewer only when the story gaze allows it. Follow with two concise natural-English sentences, 35-80 words total, not copied prose; omit unsupported details and meta commentary. Add no artist names or style tags; renderer settings supply style. Negative lists only unwanted defects/distractors and must never negate a required subject, prop, or action. Keep fields concise; audit flags are true only when grounded. If uncertain, manual marks uncertain=true; automatic returns no scene.`;
