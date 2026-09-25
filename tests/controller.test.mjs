@@ -118,6 +118,56 @@ test('character state remains available after one hundred intervening messages',
   assert.equal(c.historyAt(context.chat.length-1,last.length).states[0].characters[0].outfit,'white dress');
   assert.equal(c.historyAt(0,0).states.length,0);
 });
+test('one character keeps the last worn outfit, then changes only when the story changes it',async()=>{
+  const {context,c}=setup();
+  const beats=[
+    {text:'Erin wears a dark blue coat at the station.',outfit:'dark blue coat',evidence:'wears a dark blue coat'},
+    {text:'Erin walks into the garden and smiles.',outfit:'red coat',evidence:'Erin walks'},
+    {text:'Erin changes into a white linen dress and enters the hall.',outfit:'white linen dress',evidence:'changes into a white linen dress'},
+    {text:'Erin sits by the window.',outfit:'',evidence:''}
+  ];
+  const observed=[];
+  for(let i=0;i<beats.length;i++){
+    const {text,outfit,evidence}=beats[i];
+    if(i)context.chat.push({mes:text,swipe_id:0});else context.chat[0].mes=text;
+    const cast={name:'Erin',aliases:[],gender:'female',fixed_facts:[],outfit,outfit_evidence:evidence,outfit_class:'',outfit_specificity:'specified'};
+    const scene={cast:[cast],positive:i===1?'Erin in a red coat walks into the garden.':`Erin is visible in scene ${i}.`,negative:'text',anchor:locateQuote(text,text)};
+    c.prepareCharacters(scene,{CURRENT_TEXT:text,PREVIOUS_CONTEXT:c.historyAt(i,0,text)});
+    observed.push({outfit:cast.outfit,grounded:cast.outfit_grounded,prompt:c.effective(scene,{backend:'comfyui',model:'miaomiaoHarem',prefix:'',suffix:'',negative:''}).positive});
+    await c.issuePrompt(c.bind(i,text,text.length),scene,'manual',scene.positive);
+  }
+  assert.deepEqual(observed.map(item=>item.outfit),['dark blue coat','dark blue coat','white linen dress','white linen dress']);
+  assert.ok(observed.every(item=>item.grounded));
+  assert.match(observed[1].prompt,/dark blue coat/);
+  assert.doesNotMatch(observed[1].prompt,/red coat/);
+  assert.match(observed[3].prompt,/wearing white linen dress/);
+  assert.doesNotMatch(observed[3].prompt,/dark blue coat/);
+  assert.deepEqual(c.historyAt(4,0,'Erin').outfits.map(item=>item.outfit),['white linen dress']);
+  context.chat[2].swipe_id=1;
+  assert.equal(c.historyAt(3,0,'Erin').outfits[0].outfit,'dark blue coat');
+});
+test('automatic early prompt carries current clothes and waits for full analysis on an explicit change',async()=>{
+  const {context,c}=setup(),first='Erin wears a dark blue coat at the gate.';
+  context.chat[0].mes=first;
+  const scene={cast:[{name:'Erin',aliases:[],gender:'female',fixed_facts:[],outfit:'dark blue coat',outfit_evidence:'wears a dark blue coat'}],positive:'Erin wears a dark blue coat at the gate.',negative:'text',anchor:locateQuote(first,first)};
+  c.prepareCharacters(scene,{CURRENT_TEXT:first,PREVIOUS_CONTEXT:{recent:'',states:[],outfits:[]}});
+  await c.issuePrompt(c.bind(0,first,first.length),scene,'manual',scene.positive);
+  const seen=[];
+  c.api.analyze=async(input,signal,early)=>{
+    await early({evidence:input.CURRENT_TEXT,positive:'Erin stands in the garden and smiles.',negative:'text',score:.95,uncertain:false,subject:'characters'});
+    return {scenes:[],state_updates:[],analysisMs:1};
+  };
+  const second='Erin stands in the garden and smiles.';
+  context.chat.push({mes:second,swipe_id:0});
+  await c.analyze(1,second,0,second.length,false,new AbortController().signal,[],async early=>{seen.push(early);return true;});
+  assert.equal(seen.length,1);
+  assert.equal(seen[0].cast[0].outfit,'dark blue coat');
+  assert.equal(seen[0].cast[0].outfit_grounded,true);
+  const third='Erin changes into a white dress and waves.';
+  context.chat.push({mes:third,swipe_id:0});
+  await c.analyze(2,third,0,third.length,false,new AbortController().signal,[],async early=>{seen.push(early);return true;});
+  assert.equal(seen.length,1);
+});
 test('new profile does not change original enable list or user profile',()=>{
   const {context,c}=setup();const settings=context.extensionSettings['st-chatu8'];settings.characterEnablePresets={a:{characters:['kept']}};settings.characterPresets.kept={nameCN:'已有',characterTraits:'green eyes'};
   c.adapter.upsertProfile('new','新人','blue eyes');assert.deepEqual(settings.characterEnablePresets,{a:{characters:['kept']}});assert.equal(settings.characterPresets.kept.characterTraits,'green eyes');

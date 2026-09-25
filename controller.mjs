@@ -35,9 +35,23 @@ export class Controller {
     const chat=this.ctx().chat;
     const compact=text=>narrative(text).replace(/\s+/g,' ').trim();
     const recent=chat.slice(Math.max(0,index-3),index).filter(m=>!m.is_system).map(m=>compact(m.mes)).join('\n').slice(-2200);
-    const states=[];
-    for(let i=0;i<=index;i++)for(const s of chat[i]?.extra?.[NS]?.states||[]){
-      if(s.swipe===(chat[i].swipe_id||0)&&(i<index||s.end<=offset)&&fingerprint(chat[i].mes.slice(0,s.end))===s.prefix)states.push(s.value);
+    const states=[],worn=new Map();
+    for(let i=0;i<=index;i++){
+      const message=chat[i],meta=message?.extra?.[NS];if(!message||!meta)continue;
+      const events=[];
+      for(const s of meta.states||[])if(s.swipe===(message.swipe_id||0)&&(i<index||s.end<=offset)&&fingerprint(message.mes.slice(0,s.end))===s.prefix)events.push({end:s.end,kind:'state',value:s.value});
+      for(const p of meta.prompts||[])if(p.state!=='failed'&&p.state!=='cancelled'&&p.binding?.message===meta.id&&p.binding?.swipe===(message.swipe_id||0)&&p.anchor&&validAnchor(message.mes,p.anchor)&&(i<index||p.anchor.end<=offset))events.push({end:p.anchor.end,kind:'scene',value:p.scene});
+      for(const image of meta.images||[])if(image.binding?.message===meta.id&&image.binding?.swipe===(message.swipe_id||0)&&image.scene?.anchor&&validAnchor(message.mes,image.scene.anchor)&&(i<index||image.scene.anchor.end<=offset))events.push({end:image.scene.anchor.end,kind:'scene',value:image.scene});
+      events.sort((a,b)=>a.end-b.end||(a.kind==='state'?-1:1));
+      for(const event of events){
+        if(event.kind==='state')states.push(event.value);
+        const people=event.kind==='state'?event.value.characters||[]:event.value.cast||[];
+        for(const person of people)if(person.name&&person.outfit&&(event.kind==='state'||person.outfit_grounded)){
+          const owner=this.scope().characters[person.character_id]||Object.values(this.scope().characters).find(character=>character.name===person.name||character.aliases?.includes(person.name));
+          const name=owner?.name||person.name;
+          worn.set(name,{name,outfit:String(person.outfit).slice(0,140),evidence:String(person.outfit_evidence||event.value.evidence||'').slice(0,180),outfit_class:person.outfit_class||'',outfit_specificity:person.outfit_specificity||'unknown'});
+        }
+      }
     }
     const before=compact(narrative(chat[index]?.mes||'').slice(0,offset)).slice(-1800);
     const contextText=recent+'\n'+before+'\n'+compact(focus).slice(0,1800);
@@ -51,7 +65,8 @@ export class Controller {
       evidence:String(s.evidence||'').slice(-180),
       characters:(s.characters||[]).slice(-4).map(c=>({name:c.name,outfit:String(c.outfit||'').slice(0,140),location:String(c.location||'').slice(0,100),time:String(c.time||'').slice(0,80),injury:String(c.injury||'').slice(0,80)}))
     }));
-    return {recent:contextText.slice(-3200),states:bounded};
+    const outfits=[...worn.values()].filter(item=>relevant.has(item.name)).slice(-6);
+    return {recent:contextText.slice(-3200),states:bounded,outfits};
   }
   card(relevanceText=''){
     const c=this.ctx().characters?.[this.ctx().characterId];if(!c)return {};
@@ -94,10 +109,12 @@ export class Controller {
     const dispatchEarly=async partial=>{
       if(isManual||fallback||!onEarlyScene)return;
       try{
+        if(history.outfits.length&&/换上|换成|改穿|穿着|身穿|脱下|外套|长裙|长裤|披肩|制服|衣服|chang(?:e|es|ed) into|put on|took off|wearing|dressed in|\b(?:dress|coat|jacket|trousers|pants|shirt|skirt|robe|shawl)\b/i.test(input.CURRENT_TEXT))return;
         const names=(entry)=>[entry.name,...(entry.aliases||[])].filter(Boolean);
-        const known=input.visual_registry.filter(entry=>names(entry).some(name=>partial.evidence.includes(name))).map(entry=>({
-          name:entry.name,aliases:entry.aliases||[],gender:entry.gender||'unknown',is_subject:true,outfit:'',outfit_evidence:'',outfit_class:'',outfit_specificity:'unknown',fixed_facts:[],character_id:entry.id,profile_ref:entry.profile
-        }));
+        const known=input.visual_registry.filter(entry=>names(entry).some(name=>partial.evidence.includes(name))).map(entry=>{
+          const worn=history.outfits.find(item=>names(entry).includes(item.name));
+          return {name:entry.name,aliases:entry.aliases||[],gender:entry.gender||'unknown',is_subject:true,outfit:worn?.outfit||'',outfit_evidence:worn?.evidence||'',outfit_grounded:!!worn,outfit_class:worn?.outfit_class||'',outfit_specificity:worn?.outfit_specificity||'unknown',fixed_facts:[],character_id:entry.id,profile_ref:entry.profile};
+        });
         const scene={metadataPending:true,evidence:partial.evidence,moment:partial.evidence,event_key:fingerprint(partial.evidence),phase:'happening',score:partial.score,uncertain:partial.uncertain,
           subject:partial.subject,cast:known,shot:{action:partial.positive,essential_visible:[],framing:'front-facing shot showing the face and defining action',spatial_relations:'',face_visibility:'both_eyes',face_visibility_evidence:''},
           positive:partial.positive,negative:partial.negative||'text, watermark',audit:{grounded:true,one_moment:true,no_invented_dialogue:true}};
@@ -178,7 +195,15 @@ export class Controller {
       }
       cast.character_id=character.id;cast.profile_ref=character.profile;
       const clothingSources=[input.CURRENT_TEXT||'',input.PREVIOUS_CONTEXT?.recent||'',JSON.stringify(input.PREVIOUS_CONTEXT?.states||[]),JSON.stringify(input.character_card||{})];
-      cast.outfit_grounded=typeof cast.outfit_evidence==='string'&&cast.outfit_evidence.trim().length>=2&&clothingSources.some(source=>source.includes(cast.outfit_evidence));
+      const remembered=(input.PREVIOUS_CONTEXT?.outfits||[]).find(item=>item.name===character.name||[...character.aliases,cast.name].includes(item.name));
+      const clothingQuote=String(cast.outfit_evidence||'');
+      const currentEvidence=clothingQuote.trim().length>=2&&String(input.CURRENT_TEXT||'').includes(clothingQuote)&&/穿|换|脱|衣|裙|裤|袍|衫|外套|披肩|制服|装束|帽|鞋|袜|袖|领|wear|dress|coat|jacket|trouser|pant|shirt|skirt|robe|uniform|shawl|hood|shoe|sleeve|collar|change|outfit/i.test(clothingQuote);
+      if(remembered&&!currentEvidence){
+        const proposed=String(cast.outfit||'').trim();
+        if(proposed&&proposed.toLowerCase()!==remembered.outfit.toLowerCase()&&scene.positive?.toLowerCase().includes(proposed.toLowerCase()))scene.positive=scene.positive.replace(new RegExp(proposed.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),remembered.outfit);
+        cast.outfit=remembered.outfit;cast.outfit_evidence=remembered.evidence;cast.outfit_class=remembered.outfit_class;cast.outfit_specificity=remembered.outfit_specificity;
+      }
+      cast.outfit_grounded=!!cast.outfit&&(currentEvidence||!!remembered||typeof cast.outfit_evidence==='string'&&cast.outfit_evidence.trim().length>=2&&clothingSources.some(source=>source.includes(cast.outfit_evidence)));
     }
     this.save();
   }
@@ -224,7 +249,9 @@ export class Controller {
         .replace(/\b(?:raises?|lifts?)\s+(?:her\s+)?((?:silver|digital|film|compact)\s+)?camera\b/gi,'holds $1camera at chest height');
       negative.push('camera covering face','camera blocking eyes','camera covering nose or mouth','camera above chin','camera at eye level','viewfinder shot','monitor','screen','inset photograph');
     }
-    return {positive:join([snapshot.prefix,tag?`${character?.gender==='male'?'1boy':'1girl'}, ${tag}`:'',faceLock?'front view, both eyes visible, unobstructed face':'',cameraShot?'camera at chest height below the chin; her entire face, including nose and mouth, remains unobstructed':'',content,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag,faceLock};
+    const outfit=scene.cast?.length===1&&scene.cast[0].outfit_grounded?String(scene.cast[0].outfit||'').trim():'';
+    const clothing=outfit&&!content.toLowerCase().includes(outfit.toLowerCase())?`wearing ${outfit}`:'';
+    return {positive:join([snapshot.prefix,tag?`${character?.gender==='male'?'1boy':'1girl'}, ${tag}`:'',faceLock?'front view, both eyes visible, unobstructed face':'',clothing,cameraShot?'camera at chest height below the chin; her entire face, including nose and mouth, remains unobstructed':'',content,snapshot.suffix]),negative:[...new Map(negative.map(tag=>[tag.toLowerCase(),tag])).values()].join(', '),prototypeTag:tag,faceLock};
   }
   async issuePrompt(binding,scene,origin,positive){
     const target=this.resolve(binding);
