@@ -4,7 +4,6 @@ const path = require('node:path');
 
 const base = process.env.DIRECTOR_ST_URL || 'http://localhost:11451';
 const useNewChat = process.argv.includes('--new-chat');
-const useMinimalRoleplayReasoning = process.argv.includes('--minimal-roleplay-reasoning');
 const temporaryDirectorModel = process.argv.find(arg => arg.startsWith('--temporary-director-model='))?.slice('--temporary-director-model='.length) || '';
 const temporaryDirectorReasoning = process.argv.find(arg => arg.startsWith('--temporary-director-reasoning='))?.slice('--temporary-director-reasoning='.length) || '';
 const compactDirectorTest = process.argv.includes('--compact-director-test');
@@ -168,7 +167,7 @@ async function restoreTestChat() {
     return route.fulfill({ body: fs.readFileSync(file), contentType: file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript' });
   });
   page.on('pageerror', error => report.errors.push({ kind: 'pageerror', category: controllerErrorCategory(error.message) }));
-  if (useMinimalRoleplayReasoning || temporaryDirectorModel || temporaryDirectorReasoning || compactDirectorTest) {
+  if (temporaryDirectorModel || temporaryDirectorReasoning || compactDirectorTest) {
     page.route('**/api/backends/chat-completions/generate', async route => {
       let body;
       try { body = JSON.parse(route.request().postData() || '{}'); } catch { return route.continue(); }
@@ -195,11 +194,6 @@ async function restoreTestChat() {
           body.max_tokens = 650;
         }
         report.temporaryDirectorRequestOverride = { model: temporaryDirectorModel || 'configured model', reasoning_effort: temporaryDirectorReasoning || body.reasoning_effort || null, compactContextAndPromptFirst: compactDirectorTest, persistentSettingsChanged: false };
-      } else if (useMinimalRoleplayReasoning && body.stream && !director) {
-        body.reasoning_effort = 'minimal';
-        body.include_reasoning = false;
-        delete body.thinking;
-        report.temporaryRoleplayOverride = { fields: { reasoning_effort: 'minimal', include_reasoning: false }, persistentSettingsChanged: false };
       } else return route.continue();
       return route.continue({ postData: JSON.stringify(body) });
     });
@@ -862,7 +856,7 @@ async function restoreTestChat() {
     if (result.prompts.some(p => !p.beforeReplyEnd)) throw new Error(`Round ${round}: at least one automatic prompt was created only after the reply ended`);
     report.rounds.push(result);
     fs.mkdirSync(path.join(__dirname,'..','artifacts'),{recursive:true});
-    const visibleImage=page.locator(`#chat .mes[mesid="${result.messageIndex}"] .nd-chatu-prompt img`).first();
+    const visibleImage=page.locator(`#chat .mes[mesid="${result.messageIndex}"] .st-chatu8-image-span img`).first();
     await visibleImage.scrollIntoViewIfNeeded();
     await page.waitForTimeout(400);
     result.imageDisplay=await visibleImage.evaluate(img=>({display:getComputedStyle(img).display,visibility:getComputedStyle(img).visibility,opacity:getComputedStyle(img).opacity,rect:{width:img.getBoundingClientRect().width,height:img.getBoundingClientRect().height}}));

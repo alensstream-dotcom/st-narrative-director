@@ -1,7 +1,7 @@
 import {el,command,dialog} from './dom.mjs';
 import {prototypeSearchUrl} from './prototypes.mjs';
+import {connectionPanel} from './connection-ui.mjs';
 
-const secretKey=source=>source==='deepseek'?'api_key_deepseek':source==='openai'?'api_key_openai':'api_key_custom';
 const field=(name,input)=>{input.setAttribute('aria-label',name);return el('label',{},name,input);};
 
 export function openSettings(ui,initial='connection'){
@@ -18,55 +18,6 @@ export function openSettings(ui,initial='connection'){
   choose(views[initial]?initial:'connection');
   d.addEventListener('close',()=>{ui.statusNode=null;ui.taskList=null;},{once:true});
   return {dialog:d,choose};
-}
-
-function connectionPanel(ui,body,d){
-  const c=ui.c.config(),api=ui.c.api;
-  const source=el('select',{},el('option',{value:'deepseek',text:'DeepSeek'}),el('option',{value:'openai',text:'OpenAI'}),el('option',{value:'custom',text:'OpenAI 兼容接口'}));source.value=c.source;
-  const url=el('input',{type:'url',value:c.url||'',placeholder:'https://example.com/v1'});
-  const urlField=field('API 地址（兼容接口）',url);urlField.hidden=source.value!=='custom';
-  const mode=el('select',{},el('option',{value:'saved',text:'酒馆已保存密钥'}),el('option',{value:'session',text:'本页独立密钥'}));mode.value=c.credentialMode||'saved';
-  const secrets=el('select',{},el('option',{value:c.secretId||'',text:c.secretId?'正在读取密钥名称…':'请选择密钥'}));
-  const key=el('input',{type:'password',autocomplete:'off',value:api.temporaryKey,placeholder:'可随时修改或清除'});
-  const keyState=el('p',{class:'nd-status',text:''}),result=el('p',{class:'nd-status',role:'status','aria-live':'polite'});
-  const model=el('input',{value:c.model||'',placeholder:'输入模型 ID'});
-  const models=el('select',{},el('option',{value:'',text:'手动输入 / 尚未刷新列表'}));
-  const streamModel=el('input',{value:c.streamModel||'',placeholder:'留空时使用上方模型'});
-  const streamModels=el('select',{},el('option',{value:'',text:'手动输入 / 尚未刷新列表'}));
-  const save=()=>{c.source=source.value;c.url=url.value.trim();c.model=model.value.trim();c.streamModel=streamModel.value.trim();c.credentialMode=mode.value;ui.c.save();};
-  const modeState=()=>{const session=mode.value==='session';secrets.disabled=session;keyState.textContent=session?(api.temporaryKey?'本页密钥已填写 · 不写入聊天或配置，刷新后需重填':'本页密钥为空 · 不会退回正文默认密钥'):'可直接输入新密钥；只引用所选酒馆密钥，不改变其激活状态';};
-  const refreshSecrets=async()=>{
-    const selectedSource=source.value,state=await api.secrets();if(!body.isConnected||source.value!==selectedSource)return;
-    secrets.replaceChildren(el('option',{value:'',text:'请选择密钥'}));
-    for(const s of state[secretKey(selectedSource)]||[])secrets.append(el('option',{value:s.id,text:s.label||s.id}));
-    secrets.value=c.secretId||'';
-    if(c.secretId&&!secrets.value)result.textContent='先前选择的密钥已不存在，请重新选择。';
-  };
-  source.onchange=()=>{c.secretId='';api.clearSessionKey();key.value='';urlField.hidden=source.value!=='custom';save();void refreshSecrets().catch(e=>result.textContent=e.message);modeState();};
-  url.onchange=()=>{if(c.url!==url.value.trim()){api.clearSessionKey();key.value='';}save();modeState();};
-  mode.onchange=()=>{if(mode.value==='saved'){api.useSavedKey(secrets.value);key.value='';}save();modeState();};
-  secrets.onchange=()=>{api.useSavedKey(secrets.value);key.value='';mode.value='saved';save();modeState();result.textContent='已切换导演密钥';};
-  key.oninput=()=>{try{mode.value='session';save();api.setSessionKey(key.value);modeState();result.textContent='';}catch(e){result.textContent=e.message;}};
-  model.oninput=save;models.onchange=()=>{if(models.value){model.value=models.value;save();}};
-  streamModel.oninput=save;streamModels.onchange=()=>{if(streamModels.value){streamModel.value=streamModels.value;save();}};
-  const run=async(button,operation)=>{button.disabled=true;result.textContent='正在连接…';try{save();await operation();}catch(e){result.textContent=e.message;}finally{button.disabled=false;}};
-  const refresh=command('arrows-rotate','刷新可用模型',()=>run(refresh,async()=>{
-    const ids=await api.models();models.replaceChildren(el('option',{value:'',text:'手动输入'}),...ids.map(id=>el('option',{value:id,text:id})));streamModels.replaceChildren(el('option',{value:'',text:'手动输入'}),...ids.map(id=>el('option',{value:id,text:id})));models.value=ids.includes(c.model)?c.model:'';streamModels.value=ids.includes(c.streamModel)?c.streamModel:'';result.textContent=`读取到 ${ids.length} 个模型`;
-  }),'刷新模型');
-  const test=command('plug','测试导演连接',()=>run(test,async()=>{await api.testConnection();result.textContent='连接成功 · 模型已实际响应';}),'测试连接');
-  const copy=command('link','使用正文连接的独立副本',async()=>{
-    try{const s=ui.c.ctx().chatCompletionSettings;if(!['deepseek','openai','custom'].includes(s.chat_completion_source))throw new Error('此正文服务未适配，请选择兼容接口单独配置');
-      const state=await api.secrets();c.source=s.chat_completion_source;c.model=c.source==='custom'?s.custom_model:c.source==='deepseek'?s.deepseek_model:s.openai_model;c.url=s.custom_url||'';
-      api.useSavedKey((state[secretKey(c.source)]||[]).find(x=>x.active)?.id||'');source.value=c.source;model.value=c.model;url.value=c.url;urlField.hidden=c.source!=='custom';mode.value='saved';key.value='';save();await refreshSecrets();modeState();result.textContent='已复制连接选择，正文配置未修改';
-    }catch(e){result.textContent=e.message;}
-  },'读取正文连接');
-  const manage=command('key','管理酒馆密钥',()=>{manage.dataset.key=secretKey(source.value);d.close();},'酒馆密钥管理');
-  manage.classList.add('manage-api-keys');manage.dataset.key=secretKey(source.value);
-  body.append(el('h4',{text:'独立导演 API'}),el('div',{class:'nd-actions-inline'},copy,manage),field('服务',source),urlField,field('密钥来源',mode),field('已保存密钥',secrets),
-    el('div',{class:'nd-actions-inline'},command('arrows-rotate','刷新密钥列表',()=>void refreshSecrets().catch(e=>result.textContent=e.message),'刷新列表')),
-    field('本页独立密钥',key),el('div',{class:'nd-actions-inline'},command('eye','显示或隐藏密钥',()=>{key.type=key.type==='password'?'text':'password';}),command('eraser','清除本页密钥',()=>{api.clearSessionKey();key.value='';modeState();result.textContent='临时密钥已清除';},'清除')),keyState,
-    field('完整分析模型',models),field('模型 ID',model),field('自动生图模型',streamModels),field('自动模型 ID',streamModel),el('div',{class:'nd-actions-inline'},refresh,test),result);
-  modeState();void refreshSecrets().catch(e=>result.textContent=e.message);
 }
 
 function renderChatuPanel(ui,body){

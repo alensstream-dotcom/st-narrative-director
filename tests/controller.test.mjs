@@ -303,9 +303,18 @@ test('automatic analysis waits for enough grounded stream text, then starts befo
   await c.pump(c.round);
   assert.equal(calls,1);assert.equal(c.round.final,false);
 });
+test('a complete short visual sentence can start the director before the longer text threshold',async()=>{
+  const {context,c}=setup();
+  context.chat[0].mes='<dream_body>A woman opens the gate.</dream_body>';c.config().enabled=true;
+  let calls=0;c.analyze=async()=>{calls++;return {scenes:[]};};
+  c.startRound('normal',{},false);
+  await c.pump(c.round);
+  assert.equal(calls,1);
+  assert.equal(c.round.final,false);
+});
 
 test('a reply ending during a streaming request cannot deliver a second late scene',async()=>{
-  const {context,c}=setup();context.chat[0].mes='A woman stands by the gate. Later she opens the door.';c.config().enabled=true;
+  const {context,c}=setup();context.chat[0].mes='A woman stands by the gate. '+ 'The stone corridor is lit by rows of lamps. '.repeat(3)+'Later she opens the door.';c.config().enabled=true;
   const raw=context.chat[0].mes,sent=[];
   c.adapter.promptStyle=()=>({backend:'test',prefix:'',suffix:'',negative:'',model:'test'});
   c.issuePrompt=async(_binding,scene)=>{sent.push(scene.event_key);return {};};
@@ -341,7 +350,7 @@ test('hidden reasoning length does not satisfy the initial visible-story thresho
   c.startRound('normal',{},false);
   await c.pump(c.round);
   assert.equal(calls,0);
-  context.chat[0].mes=context.chat[0].mes.replace('</dream_body>','BCDEFGHIJKLMNOP</dream_body>');
+  context.chat[0].mes=context.chat[0].mes.replace('</dream_body>',`${'A woman walks by the gate. '.repeat(6)}</dream_body>`);
   await c.pump(c.round);
   assert.equal(calls,1);
   assert.equal(c.round.final,false);

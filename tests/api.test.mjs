@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DirectorAPI} from '../api.mjs';
+import {DirectorAPI,normalizeModelIds} from '../api.mjs';
 import {AUTO_DIRECTOR_SCHEMA,AUTO_STREAM_SCHEMA} from '../schema.mjs';
 
 test('automatic streaming schema emits evidence and usable prompt fields first',()=>{
@@ -90,6 +90,68 @@ test('automatic streaming analysis emits a grounded prompt before late scene met
   }finally{globalThis.fetch=originalFetch;}
 });
 
+test('automatic stream can issue a complete scene clause before the positive JSON string closes',async()=>{
+  const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',streamModel:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
+  const api=new DirectorAPI(()=>({getRequestHeaders:()=>({})}),()=>config);
+  const positive='front view, both eyes visible, and an unobstructed face. Satan lowers her burning axe beside the stone gate while a distant bell rings.';
+  const full=JSON.stringify({scenes:[{evidence:'Satan lowers her axe.',score:.94,uncertain:false,subject:'characters',positive,negative:'text, watermark',cast:[]}],state_updates:[]});
+  const split=full.indexOf(' while a distant bell')+' while a dis'.length;
+  const originalFetch=globalThis.fetch;
+  let sendRest;
+  try{
+    globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){
+      const encoder=new TextEncoder(),frame=content=>`data: ${JSON.stringify({choices:[{delta:{content}}]})}\n\n`;
+      controller.enqueue(encoder.encode(frame(full.slice(0,split))));
+      sendRest=()=>{controller.enqueue(encoder.encode(frame(full.slice(split))));controller.close();};
+    }}),{status:200,headers:{'content-type':'text/event-stream'}});
+    let resolveEarly;
+    const early=new Promise(resolve=>{resolveEarly=resolve;});
+    let settled=false;
+    const analysis=api.analyze({mode:'automatic',CURRENT_TEXT:'Satan lowers her axe.',visual_registry:[{name:'Satan',gender:'female',aliases:[]}]},undefined,async scene=>{resolveEarly(scene);return true;}).then(result=>{settled=true;return result;});
+    const scene=await early;
+    assert.equal(settled,false);
+    assert.equal(scene.positive,'front view, both eyes visible, and an unobstructed face. Satan lowers her burning axe beside the stone gate');
+    assert.equal(scene.subject,'characters');
+    sendRest();
+    assert.equal((await analysis).scenes[0].positive,positive);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
+test('automatic stream rejects incomplete or ungrounded partial positive strings',async()=>{
+  const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',streamModel:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
+  const api=new DirectorAPI(()=>({getRequestHeaders:()=>({})}),()=>config);
+  const base={evidence:'Satan lowers her axe.',score:.94,uncertain:false,subject:'characters',positive:'front view, both eyes visible, and an unobstructed face. Satan lowers her burning axe beside the stone gate.',negative:'text, watermark',cast:[]};
+  const variants=[
+    {name:'low score',scene:{...base,score:.7},partial:'stone gate'},
+    {name:'out-of-range score',scene:{...base,score:1.2},partial:'stone gate'},
+    {name:'uncertain scene',scene:{...base,uncertain:true},partial:'stone gate'},
+    {name:'unquoted evidence',scene:{...base,evidence:'Satan raises her axe.'},partial:'stone gate'},
+    {name:'incorrect subject',scene:{...base,subject:'environment'},partial:'stone gate'},
+    {name:'missing place object',scene:base,partial:'beside the st'},
+    {name:'escaped positive',scene:{...base,positive:'front view, both eyes visible, and an unobstructed face. Satan lowers her burning axe beside the stone gate\\n'},partial:'gate\\'},
+  ];
+  const originalFetch=globalThis.fetch;
+  try{
+    for(const variant of variants){
+      const full=JSON.stringify({scenes:[variant.scene],state_updates:[]});
+      const split=full.indexOf(variant.partial)+variant.partial.length;
+      assert.ok(split>=variant.partial.length,variant.name);
+      let sendRest;
+      globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){
+        const encoder=new TextEncoder(),frame=content=>`data: ${JSON.stringify({choices:[{delta:{content}}]})}\n\n`;
+        controller.enqueue(encoder.encode(frame(full.slice(0,split))));
+        sendRest=()=>{controller.enqueue(encoder.encode(frame(full.slice(split))));controller.close();};
+      }}),{status:200,headers:{'content-type':'text/event-stream'}});
+      let earlyCount=0;
+      const analysis=api.analyze({mode:'automatic',CURRENT_TEXT:'Satan lowers her axe.',visual_registry:[{name:'Satan',gender:'female',aliases:[]}]},undefined,async()=>{earlyCount++;return true;});
+      await new Promise(resolve=>setTimeout(resolve,10));
+      assert.equal(earlyCount,0,variant.name);
+      sendRest();
+      await analysis;
+    }
+  }finally{globalThis.fetch=originalFetch;}
+});
+
 test('malformed fast JSON falls back once to the compact structured stream schema',async()=>{
   const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',streamModel:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
   const api=new DirectorAPI(()=>({getRequestHeaders:()=>({'content-type':'application/json'})}),()=>config),schemas=[];
@@ -115,6 +177,16 @@ test('gateway timeout and quota envelopes are classified even when HTTP status i
     globalThis.fetch=async()=>new Response(JSON.stringify({quota_error:{message:'quota exceeded'}}),{status:200,headers:{'content-type':'application/json'}});
     await assert.rejects(api.post('/completion',{}),error=>error.status===429);
   }finally{globalThis.fetch=originalFetch;}
+});
+
+test('model list accepts common compatible-provider shapes and recovers from a transient proxy error',async()=>{
+  assert.deepEqual(normalizeModelIds({models:[{name:'beta'},'alpha',{model:'beta'}]}),['alpha','beta']);
+  assert.deepEqual(normalizeModelIds({data:{data:[{id:'gpt-6-sol'}]}}),['gpt-6-sol']);
+  const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
+  const api=new DirectorAPI(()=>({}),()=>config);let calls=0;
+  api.post=async()=>{if(++calls===1){const error=new Error('proxy returned error');error.status=0;throw error;}return {data:[{id:'gpt-6-sol'},{id:'gpt-6-astra'}]};};
+  assert.deepEqual(await api.models(),['gpt-6-astra','gpt-6-sol']);
+  assert.equal(calls,2);
 });
 
 test('analysis retries a gateway 504 once and then returns the parsed scene',async()=>{

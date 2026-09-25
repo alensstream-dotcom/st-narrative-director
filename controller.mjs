@@ -1,4 +1,4 @@
-import {NS,uuid,fingerprint,clone,narrative,locateQuote,validAnchor,validateScene,AutoBudget,Task,assertEnglish} from './core.mjs';
+import {NS,uuid,fingerprint,clone,narrative,completeEnd,locateQuote,validAnchor,validateScene,AutoBudget,Task,assertEnglish} from './core.mjs';
 import {DirectorAPI} from './api.mjs';
 import {ChatuAdapter} from './adapter.mjs';
 import {prototypeCandidates,prototypeTag} from './prototypes.mjs';
@@ -320,9 +320,13 @@ export class Controller {
     r.messageId=this.meta(m).id;
     const raw=m.mes||'',visible=narrative(raw),end=r.final?visible.length:visible.trimEnd().length;
     if(r.final&&r.budget.accepted.length){r.cursor=end;r.pending.length=0;r.finalProcessed=true;this.finishingRounds.delete(r);return;}
-    const minimum=r.cursor?240:16;
+    // A near-empty unfinished opening can occupy the only live director request
+    // while the drawable scene streams past. A complete short sentence is useful
+    // evidence, and the final pass still handles shorter replies.
+    const minimum=r.cursor?240:100;
     const freshVisibleChars=visible.slice(r.cursor,end).replace(/\s/g,'').length;
-    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length&&!(r.final&&!r.finalProcessed))||freshVisibleChars<minimum&&!r.final)return;
+    const firstCompleteSentence=!r.cursor&&freshVisibleChars>=16&&completeEnd(visible.slice(0,end))>0;
+    if((end<=r.cursor&&!r.final)||(end<=r.cursor&&!r.pending.length&&!(r.final&&!r.finalProcessed))||freshVisibleChars<minimum&&!firstCompleteSentence&&!r.final)return;
     if(!r.final&&Date.now()-r.lastCall<1800){r.timer=setTimeout(()=>{r.timer=null;void this.pump(r);},400);return;}
     r.busy=true;r.lastCall=Date.now();this.status('导演正在旁路分析');
     try{
