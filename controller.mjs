@@ -1,7 +1,7 @@
 import {NS,uuid,fingerprint,clone,narrative,completeEnd,locateQuote,validAnchor,validateScene,AutoBudget,Task,assertEnglish} from './core.mjs';
 import {DirectorAPI} from './api.mjs';
 import {ChatuAdapter} from './adapter.mjs';
-import {prototypeCandidates,prototypeTag} from './prototypes.mjs';
+import {prototypeCandidates,automaticPrototype,prototypeTag} from './prototypes.mjs';
 
 export class Controller {
   constructor(context){
@@ -172,9 +172,9 @@ export class Controller {
       character.visualFacts ||= {};
       for(const fact of facts)character.visualFacts[fact.field]=fact.value;
       if(!character.lock&&(!character.prototypeMode||character.prototypeMode==='auto')){
-        const candidates=prototypeCandidates(Object.entries(character.visualFacts).map(([field,value])=>({field,value})),cast.gender);
+        const candidate=automaticPrototype(Object.entries(character.visualFacts).map(([field,value])=>({field,value})),cast.gender);
         character.prototypeMode='auto';
-        if(!candidates.some(p=>p.id===character.prototypeId))character.prototypeId=candidates[0]?.id||'';
+        character.prototypeId=candidate?.id||'';
       }
       cast.character_id=character.id;cast.profile_ref=character.profile;
       const clothingSources=[input.CURRENT_TEXT||'',input.PREVIOUS_CONTEXT?.recent||'',JSON.stringify(input.PREVIOUS_CONTEXT?.states||[]),JSON.stringify(input.character_card||{})];
@@ -187,7 +187,7 @@ export class Controller {
     if(character.lock)throw new Error('请先解除此人物的锁定，再更换档案');
     character.profile=profileId;character.sync={updated:false,reason:'linked'};this.save();this.onchange();
   }
-  prototypeCandidates(character){return prototypeCandidates(Object.entries(character.visualFacts||{}).map(([field,value])=>({field,value})),'female');}
+  prototypeCandidates(character){return prototypeCandidates(Object.entries(character.visualFacts||{}).map(([field,value])=>({field,value})),character.gender||'female');}
   setPrototype(characterId,mode,id='',custom=''){
     const character=this.scope().characters[characterId];if(!character)throw new Error('人物不存在');
     if(character.lock)throw new Error('请先解除人物形象锁定，再切换视觉原型');
@@ -195,7 +195,7 @@ export class Controller {
     if(mode==='candidate'&&!this.prototypeCandidates(character).some(p=>p.id===id))throw new Error('候选原型与已知外貌不匹配');
     if(mode==='custom'&&(!custom.trim()||custom.length>100||/[^\x20-\x7e]/.test(custom)))throw new Error('自定义角色 Tag 需为 1–100 个英文字符');
     character.prototypeMode=mode;
-    character.prototypeId=mode==='auto'?this.prototypeCandidates(character)[0]?.id||'':mode==='candidate'?id:'';
+    character.prototypeId=mode==='auto'?automaticPrototype(Object.entries(character.visualFacts||{}).map(([field,value])=>({field,value})),character.gender||'female')?.id||'':mode==='candidate'?id:'';
     character.prototypeCustom=mode==='custom'?custom.trim():'';
     this.save();this.onchange();
   }

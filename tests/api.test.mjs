@@ -200,6 +200,23 @@ test('model list accepts common compatible-provider shapes and recovers from a t
   assert.equal(calls,2);
 });
 
+test('a session key can fetch models directly when the ST proxy returns only an error envelope',async()=>{
+  const config={source:'custom',url:'https://example.test/v1',model:'',credentialMode:'session'};
+  const api=new DirectorAPI(()=>({}),()=>config);api.setSessionKey('session-only-test-key');
+  let proxyCalls=0,directCalls=0;
+  api.post=async()=>{proxyCalls++;const error=new Error('proxy error');error.status=0;throw error;};
+  const originalFetch=globalThis.fetch;
+  try{
+    globalThis.fetch=async(url,options)=>{
+      directCalls++;assert.equal(url,'https://example.test/v1/models');
+      assert.equal(options.headers.Authorization,'Bearer session-only-test-key');
+      return new Response(JSON.stringify({models:['gpt-6-sol']}),{status:200,headers:{'content-type':'application/json'}});
+    };
+    assert.deepEqual(await api.models(),['gpt-6-sol']);
+    assert.equal(proxyCalls,2);assert.equal(directCalls,1);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
 test('analysis retries a gateway 504 once and then returns the parsed scene',async()=>{
   const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
   const api=new DirectorAPI(()=>({}),()=>config);let attempts=0;

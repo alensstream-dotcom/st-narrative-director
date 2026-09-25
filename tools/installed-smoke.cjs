@@ -38,24 +38,24 @@ const path=require('node:path');
       throw new Error('SillyTavern settings are not ready; cannot verify persistence');
     }
     await page.evaluate(()=>globalThis[Symbol.for('st.narrative-director.debug.v1')].ui.settings());
-    await page.getByRole('button',{name:'使用正文连接的独立副本',exact:true}).waitFor();
+    await page.getByRole('button',{name:'连接并获取模型',exact:true}).waitFor();
     if(process.argv.includes('--configure-krill')){
+      await page.locator('details.nd-connection-advanced').last().locator('summary').click();
       const secretId=process.env.DIRECTOR_SECRET_ID;
       if(!secretId)throw new Error('DIRECTOR_SECRET_ID is required; never put the API key in this script');
-      await page.getByRole('combobox',{name:'服务'}).selectOption('custom');
-      const url=page.getByRole('textbox',{name:'API 地址'});
+      await page.getByRole('combobox',{name:'服务类型'}).selectOption('custom');
+      const url=page.getByRole('textbox',{name:'API Base URL'});
       await url.fill('https://api-slb.krill-code.net/v1');await url.press('Tab');
-      const secrets=page.getByRole('combobox',{name:'已保存密钥'});
+      const secrets=page.getByRole('combobox',{name:'酒馆已保存密钥'});
       await secrets.locator(`option[value="${secretId}"]`).waitFor({state:'attached',timeout:30000});
       await secrets.selectOption(secretId);
-      const model=page.getByRole('combobox',{name:'完整分析模型'});
-      await model.selectOption('__manual__');
-      await page.getByRole('textbox',{name:'模型 ID'}).fill('gpt-6-sol');
-      await page.getByRole('button',{name:'测试导演连接'}).click();
-      await page.getByText('连接成功 · 模型已实际响应',{exact:true}).waitFor({timeout:90000});
+      await page.getByRole('textbox',{name:'模型名称'}).fill('gpt-6-sol');
+      await page.getByRole('button',{name:'测试当前模型'}).click();
+      await page.getByText('连接成功，当前模型已返回可见文本。',{exact:true}).waitFor({timeout:90000});
       await page.waitForTimeout(1500);
     }
     if(process.argv.includes('--configure')){
+      await page.locator('details.nd-connection-advanced').last().locator('summary').click();
       const saved=page.waitForResponse(r=>{
         if(!r.url().endsWith('/api/settings/save')||r.request().method()!=='POST')return false;
         const config=r.request().postDataJSON()?.extension_settings?.narrative_director_v1;

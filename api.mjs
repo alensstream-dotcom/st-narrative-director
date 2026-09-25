@@ -156,7 +156,21 @@ export class DirectorAPI {
         break;
       }
     }
-    const error=new Error('服务商暂时没有返回可用模型。已填模型仍可使用；请稍后重试、检查地址与密钥，或手动输入模型 ID。');
+    // Chatu8 also offers a direct /models request when ST's status proxy fails.
+    // Only a key entered for this session can be used here; stored secrets never
+    // leave the server and cannot be read back by the extension.
+    if(this.config().credentialMode==='session'&&this.config().source==='custom'&&this.temporaryKey){
+      try{
+        const response=await fetch(`${this.endpoint()}/models`,{
+          headers:{Authorization:`Bearer ${this.temporaryKey}`},signal:AbortSignal.timeout(15000),
+        });
+        if(!response.ok){const e=new Error(this.errorMessage(response.status));e.status=response.status;throw e;}
+        const value=await response.json();this.raiseApiEnvelope(response,value);
+        const ids=normalizeModelIds(value);
+        if(ids.length)return ids;
+      }catch(error){lastError=error;}
+    }
+    const error=new Error('无法获取模型列表。请检查 API 地址（含 /v1）和密钥；已填模型 ID 仍可直接测试连接。手机直连若被跨域限制，请使用酒馆已保存密钥或允许跨域的接口。');
     error.cause=lastError;
     throw error;
   }

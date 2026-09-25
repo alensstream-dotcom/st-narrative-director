@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {prototypeCandidates,prototypeSearchUrl,prototypeTag} from '../prototypes.mjs';
+import {prototypeCandidates,automaticPrototype,prototypeSearchUrl,prototypeTag} from '../prototypes.mjs';
 const facts=(hair,eyes,style,feature='')=>[
   {field:'hair_color',value:hair},{field:'eye_color',value:eyes},
   {field:'hair_style',value:style},{field:'distinctive_features',value:feature}
@@ -13,6 +13,22 @@ test('visual prototype needs matching known fixed traits, not just hair color',(
 test('nonhuman features require story evidence before matching',()=>{
   assert.deepEqual(prototypeCandidates(facts('silver','green','long hair')),[]);
   assert.equal(prototypeCandidates(facts('silver','green','long hair','pointed elf ears'))[0]?.id,'frieren');
+});
+test('Wuthering Waves and Arknights visual matches use canonical Anima character tags',()=>{
+  const cases=[
+    [facts('salmon pink','golden','long ponytail'),'changli','changli_(wuthering_waves)'],
+    [facts('silver-white','white','very long hair'),'jinhsi','jinhsi_(wuthering_waves)'],
+    [facts('black','orange','long hair','wolf ears'),'texas','texas_(arknights)'],
+    [facts('silver','grey','long hair','wolf ears and a scar'),'lappland','lappland_(arknights)'],
+    [facts('brown','teal','long hair','rabbit ears'),'amiya','amiya_(arknights)'],
+    [facts('red','orange','short hair','halo'),'exusiai','exusiai_(arknights)'],
+  ];
+  for(const [fixed,expected,tag] of cases){
+    const match=automaticPrototype(fixed);
+    assert.equal(match?.id,expected);
+    assert.match(prototypeTag({gender:'female',prototypeMode:'auto',visualFacts:Object.fromEntries(fixed.map(x=>[x.field,x.value]))},'comfyui','anima'),new RegExp(tag.replace(/[()]/g,'\\$&')));
+  }
+  assert.equal(automaticPrototype(facts('black','orange','long hair'))?.id,undefined);
 });
 test('prototype tag is limited to the matching renderer and can be turned off',()=>{
   const character={prototypeId:'violet',prototypeMode:'auto',visualFacts:{hair_color:'blonde',eye_color:'blue',hair_style:'long hair'}};

@@ -8,7 +8,14 @@ const BANK=[
   {id:'asuka',label:'Asuka Langley',tag:'souryuu asuka langley, neon genesis evangelion',gender:'female',hair:'red',eyes:'blue',style:'long'},
   {id:'frieren',label:'Frieren',tag:'frieren, sousou no frieren',gender:'female',hair:'silver',eyes:'green',style:'long',feature:'elf'},
   {id:'emilia',label:'Emilia',tag:'emilia (re:zero), re:zero kara hajimeru isekai seikatsu',gender:'female',hair:'silver',eyes:'purple',style:'long',feature:'elf'},
-  {id:'zero-two',label:'Zero Two',tag:'zero two (darling in the franxx), darling in the franxx',gender:'female',hair:'pink',eyes:'green',style:'long',feature:'horn'}
+  {id:'zero-two',label:'Zero Two',tag:'zero two (darling in the franxx), darling in the franxx',gender:'female',hair:'pink',eyes:'green',style:'long',feature:'horn'},
+  {id:'changli',label:'长离 · 鸣潮',tag:'changli_(wuthering_waves), wuthering_waves',gender:'female',hair:'pink',eyes:'gold',style:'long'},
+  {id:'jinhsi',label:'今汐 · 鸣潮',tag:'jinhsi_(wuthering_waves), wuthering_waves',gender:'female',hair:'silver',eyes:['white','gray'],style:'long'},
+  {id:'skadi',label:'斯卡蒂 · 明日方舟',tag:'skadi_(arknights), arknights',gender:'female',hair:'silver',eyes:'red',style:'long'},
+  {id:'amiya',label:'阿米娅 · 明日方舟',tag:'amiya_(arknights), arknights',gender:'female',hair:'brown',eyes:'blue',style:'long',feature:'rabbit'},
+  {id:'exusiai',label:'能天使 · 明日方舟',tag:'exusiai_(arknights), arknights',gender:'female',hair:'red',eyes:'gold',style:'short',feature:'halo'},
+  {id:'texas',label:'德克萨斯 · 明日方舟',tag:'texas_(arknights), arknights',gender:'female',hair:'black',eyes:'gold',style:'long',feature:'wolf'},
+  {id:'lappland',label:'拉普兰德 · 明日方舟',tag:'lappland_(arknights), arknights',gender:'female',hair:'silver',eyes:'gray',style:'long',feature:'wolf'}
 ];
 export const prototypeById=id=>BANK.find(p=>p.id===id)||null;
 const category=(value,kind)=>{
@@ -16,7 +23,7 @@ const category=(value,kind)=>{
   const groups=kind==='hair'?[
     ['silver',/silver|white|gray|grey|platinum/],['blonde',/blond|gold|yellow/],['black',/black/],['blue',/blue|azure/],['pink',/pink/],['red',/red|auburn|ginger|orange/],['brown',/brown|chestnut/],['purple',/purple|violet/],['green',/green/]
   ]:[
-    ['blue',/blue|azure/],['green',/green|emerald/],['red',/red|crimson/],['purple',/purple|violet/],['gray',/gray|grey|silver/],['gold',/gold|amber|yellow/],['brown',/brown/],['black',/black/],['pink',/pink/]
+    ['blue',/blue|azure|teal|aqua/],['green',/green|emerald/],['red',/red|crimson/],['purple',/purple|violet/],['white',/white|pale ivory/],['gray',/gray|grey|silver/],['gold',/gold|amber|yellow|orange/],['brown',/brown/],['black',/black/],['pink',/pink/]
   ];
   return groups.find(([,pattern])=>pattern.test(text))?.[0]||'';
 };
@@ -27,7 +34,13 @@ export function prototypeCandidates(facts,gender='female'){
   const style=String(byField.hair_style||'').toLowerCase();
   const length=/\b(short|bob|pixie|shoulder.length)\b/.test(style)?'short':/\b(long|waist.length)\b/.test(style)?'long':'';
   const features=String(byField.distinctive_features||'').toLowerCase();
-  return BANK.filter(p=>p.gender===gender&&p.hair===hair&&p.eyes===eyes&&(!length||p.style===length)&&(!p.feature||features.includes(p.feature)));
+  const nonhuman=/(?:\belf\b|\bwolf\b|\brabbit\b|\bhalo\b|\bhorn\b)/.exec(features)?.[0]||'';
+  return BANK.filter(p=>p.gender===gender&&p.hair===hair&&(Array.isArray(p.eyes)?p.eyes.includes(eyes):p.eyes===eyes)&&(!length||p.style===length)
+    &&(!nonhuman||p.feature===nonhuman)&&(!p.feature||new RegExp(`\\b${p.feature}\\b`).test(features)));
+}
+export function automaticPrototype(facts,gender='female'){
+  const candidates=prototypeCandidates(facts,gender);
+  return candidates.length===1?candidates[0]:null;
 }
 export function prototypeSearchUrl(character){
   const facts=character?.visualFacts||{},params=new URLSearchParams({mode:'characters'});
@@ -47,5 +60,8 @@ export function prototypeTag(character,backend,model){
   if(character?.prototypeMode==='none')return '';
   if(character?.prototypeMode==='custom')return character.prototypeCustom||'';
   const facts=Object.entries(character?.visualFacts||{}).map(([field,value])=>({field,value}));
-  return prototypeCandidates(facts).find(p=>p.id===character?.prototypeId)?.tag||'';
+  const candidate=character?.prototypeMode==='candidate'
+    ?prototypeCandidates(facts,character?.gender||'female').find(p=>p.id===character?.prototypeId)
+    :automaticPrototype(facts,character?.gender||'female');
+  return candidate?.tag||'';
 }

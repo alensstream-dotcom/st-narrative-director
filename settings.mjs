@@ -1,5 +1,5 @@
 import {el,command,dialog} from './dom.mjs';
-import {prototypeSearchUrl} from './prototypes.mjs';
+import {prototypeSearchUrl,prototypeById} from './prototypes.mjs';
 import {connectionPanel} from './connection-ui.mjs';
 
 const field=(name,input)=>{input.setAttribute('aria-label',name);return el('label',{},name,input);};
@@ -72,15 +72,23 @@ function characterPanel(ui,body,d){
     const facts=el('textarea',{value:profile?[profile.characterTraits,profile.facialFeatures].filter(Boolean).join('\n'):'关联档案已删除',rows:3,readonly:true});
     const sync=character.sync?.reason==='user-edited'?'检测到用户编辑，停止自动覆盖':profile?.directorOwner===character.id?'本插件建档，可渐进补全未知外貌':'复用现有档案，保持用户编辑';
     section.append(el('div',{class:'nd-person-title'},el('h4',{text:character.name}),el('span',{class:'nd-badge',text:character.lock?'已锁定外貌':'未锁定'})),field('智绘姬档案',select),field('当前档案外貌',facts),el('small',{text:sync}),field('别名（逗号分隔）',aliases));
-    const candidates=c.prototypeCandidates(character),prototype=el('select',{},el('option',{value:'auto',text:`自动匹配${candidates.length?` · ${candidates[0].label}`:' · 暂无可靠候选'}`}),el('option',{value:'none',text:'仅使用固定外貌描述'}),...candidates.map(p=>el('option',{value:`candidate:${p.id}`,text:p.label})),el('option',{value:'custom',text:'自定义角色 Tag'}));
+    const candidates=c.prototypeCandidates(character),automatic=candidates.length===1?candidates[0]:null;
+    const prototype=el('select',{},el('option',{value:'auto',text:`自动匹配${automatic?` · ${automatic.label}`:candidates.length>1?' · 多个相似候选，请手选':' · 暂无可靠候选'}`}),el('option',{value:'none',text:'仅使用固定外貌描述'}),...candidates.map(p=>el('option',{value:`candidate:${p.id}`,text:p.label})),el('option',{value:'custom',text:'自定义角色 Tag'}));
     prototype.value=character.prototypeMode==='candidate'?`candidate:${character.prototypeId}`:character.prototypeMode||'auto';
     if(!prototype.value)prototype.value='auto';
     const custom=el('input',{value:character.prototypeCustom||'',placeholder:'例如 violet evergarden',maxlength:100});
     const customField=field('自定义 Anima 角色 Tag',custom);customField.hidden=prototype.value!=='custom';
+    const tagPreview=el('small',{class:'nd-hint'});
+    const showTag=()=>{
+      const tag=prototype.value==='auto'?automatic?.tag:prototype.value.startsWith('candidate:')?prototypeById(prototype.value.slice('candidate:'.length))?.tag:prototype.value==='custom'?custom.value.trim():'';
+      tagPreview.textContent=tag?`Anima 角色外貌参考：${tag}。当前剧情服装、动作仍以正文为准。`:'没有可靠角色 Tag 时，仅使用已知固定外貌描述。';
+    };
     prototype.disabled=!!character.lock;custom.disabled=!!character.lock;
-    prototype.onchange=()=>{customField.hidden=prototype.value!=='custom';if(prototype.value==='custom')return;try{const [mode,id]=prototype.value.split(':');c.setPrototype(character.id,mode,id);status.textContent='视觉原型已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
+    prototype.onchange=()=>{customField.hidden=prototype.value!=='custom';showTag();if(prototype.value==='custom')return;try{const [mode,id]=prototype.value.split(':');c.setPrototype(character.id,mode,id);status.textContent='视觉原型已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
+    custom.oninput=showTag;
     custom.onchange=()=>{try{c.setPrototype(character.id,'custom','',custom.value);status.textContent='自定义角色 Tag 已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
-    section.append(field('Anima 视觉原型',prototype),customField,el('div',{class:'nd-actions-inline'},el('a',{href:prototypeSearchUrl(character),target:'_blank',rel:'noopener noreferrer',text:'按当前外观筛选 ANIMADEX'})),el('small',{text:character.lock?'已锁定；先解除锁定才能换原型':'只匹配已知外貌；服装和动作仍取自当前剧情'}));
+    showTag();
+    section.append(field('Anima 视觉原型',prototype),customField,tagPreview,el('div',{class:'nd-actions-inline'},el('a',{href:prototypeSearchUrl(character),target:'_blank',rel:'noopener noreferrer',text:'按当前外观筛选 ANIMADEX'})),el('small',{text:character.lock?'已锁定；先解除锁定才能换原型':'自动匹配需要足够固定外貌证据；有多个相似候选时手动选择'}));
     const outfits=c.adapter.outfitsForProfile(character.profile),wardrobe=el('details',{},el('summary',{text:`智绘姬服装预设 ${outfits.length}`}));
     for(const outfit of outfits)wardrobe.append(el('div',{class:'nd-profile-row'},el('strong',{text:outfit.nameCN||outfit.nameEN||outfit.id}),el('small',{text:outfit.description||'未填写服装描述'})));
     section.append(wardrobe);
