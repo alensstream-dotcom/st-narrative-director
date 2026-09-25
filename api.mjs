@@ -130,8 +130,13 @@ export class DirectorAPI {
   }
   errorMessage(status){return status===401||status===403?'密钥或访问权限验证失败。可以直接修改密钥后重试。':status===429?'服务限流或额度不足，请稍后重试或检查余额。':status===404?'接口地址或模型不存在，请检查 API 地址与模型。':status>=502&&status<=504?'导演 API 中转网关暂时超时或不可用；分析会进行一次短暂重试，未成功时不会提交图片。':`导演服务请求失败${status?'（HTTP '+status+'）':''}，请检查地址、模型、密钥和网络。`;}
   async testConnection(signal){
-    const result=await this.post('/api/backends/chat-completions/generate',{...this.connection(),messages:[{role:'user',content:'Reply with OK.'}],stream:false,max_tokens:16,temperature:0},signal||AbortSignal.timeout(30000));
-    if(!result.choices?.length)throw new Error('服务未返回有效聊天响应');return true;
+    const connection=this.connection(),fast=/^gpt-6-sol$/i.test(connection.model);
+    const result=await this.post('/api/backends/chat-completions/generate',{
+      ...connection,messages:[{role:'user',content:'Reply with OK.'}],stream:false,max_tokens:fast?64:128,temperature:0,
+      ...(fast?{reasoning_effort:'none',...(connection.chat_completion_source==='custom'?{custom_include_body:JSON.stringify({reasoning_effort:'none'})}:{})}:{}),
+    },signal||AbortSignal.timeout(30000));
+    if(!result.choices?.some(choice=>String(choice.message?.content||'').trim()))throw new Error('模型连接已响应，但没有返回可见文本；请检查模型与输出上限。');
+    return true;
   }
   async secrets() { return this.post('/api/secrets/read',{}); }
   async models() {

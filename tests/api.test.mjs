@@ -90,6 +90,17 @@ test('automatic streaming analysis emits a grounded prompt before late scene met
   }finally{globalThis.fetch=originalFetch;}
 });
 
+test('connection check requires visible model output and only sets auxiliary reasoning',async()=>{
+  const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
+  const api=new DirectorAPI(()=>({}),()=>config);let request;
+  api.post=async(_path,body)=>{request=body;return {choices:[{message:{content:''}}]};};
+  await assert.rejects(api.testConnection(),/没有返回可见文本/);
+  assert.equal(request.max_tokens,64);
+  assert.deepEqual(JSON.parse(request.custom_include_body),{reasoning_effort:'none'});
+  api.post=async()=>({choices:[{message:{content:'OK'}}]});
+  assert.equal(await api.testConnection(),true);
+});
+
 test('automatic stream can issue a complete scene clause before the positive JSON string closes',async()=>{
   const config={source:'custom',url:'https://example.test/v1',model:'gpt-6-sol',streamModel:'gpt-6-sol',secretId:'stored-id',credentialMode:'saved'};
   const api=new DirectorAPI(()=>({getRequestHeaders:()=>({})}),()=>config);
