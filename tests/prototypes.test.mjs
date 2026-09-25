@@ -16,12 +16,12 @@ test('nonhuman features require story evidence before matching',()=>{
 });
 test('Wuthering Waves and Arknights visual matches use canonical Anima character tags',()=>{
   const cases=[
-    [facts('salmon pink','golden','long ponytail'),'changli','changli_(wuthering_waves)'],
-    [facts('silver-white','white','very long hair'),'jinhsi','jinhsi_(wuthering_waves)'],
-    [facts('black','orange','long hair','wolf ears'),'texas','texas_(arknights)'],
-    [facts('silver','grey','long hair','wolf ears and a scar'),'lappland','lappland_(arknights)'],
-    [facts('brown','teal','long hair','rabbit ears'),'amiya','amiya_(arknights)'],
-    [facts('red','orange','short hair','halo'),'exusiai','exusiai_(arknights)'],
+    [facts('salmon pink','golden','long ponytail'),'changli','changli (wuthering waves)'],
+    [facts('silver-white','white','very long hair'),'jinhsi','jinhsi (wuthering waves)'],
+    [facts('black','orange','long hair','wolf ears'),'texas','texas (arknights)'],
+    [facts('silver','grey','long hair','wolf ears and a scar'),'lappland','lappland (arknights)'],
+    [facts('brown','teal','long hair','rabbit ears'),'amiya','amiya (arknights)'],
+    [facts('red','orange','short hair','halo'),'exusiai','exusiai (arknights)'],
   ];
   for(const [fixed,expected,tag] of cases){
     const match=automaticPrototype(fixed);

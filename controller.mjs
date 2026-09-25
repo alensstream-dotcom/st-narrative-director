@@ -188,15 +188,18 @@ export class Controller {
     character.profile=profileId;character.sync={updated:false,reason:'linked'};this.save();this.onchange();
   }
   prototypeCandidates(character){return prototypeCandidates(Object.entries(character.visualFacts||{}).map(([field,value])=>({field,value})),character.gender||'female');}
-  setPrototype(characterId,mode,id='',custom=''){
+  setPrototype(characterId,mode,id='',custom='',catalog=null){
     const character=this.scope().characters[characterId];if(!character)throw new Error('人物不存在');
     if(character.lock)throw new Error('请先解除人物形象锁定，再切换视觉原型');
     if(!['auto','none','candidate','custom'].includes(mode))throw new Error('未知视觉原型模式');
     if(mode==='candidate'&&!this.prototypeCandidates(character).some(p=>p.id===id))throw new Error('候选原型与已知外貌不匹配');
-    if(mode==='custom'&&(!custom.trim()||custom.length>100||/[^\x20-\x7e]/.test(custom)))throw new Error('自定义角色 Tag 需为 1–100 个英文字符');
+    if(mode==='custom'&&(!custom.trim()||custom.length>180||/[^\x20-\x7e]/.test(custom)))throw new Error('自定义角色 Tag 需为 1–180 个英文字符');
     character.prototypeMode=mode;
     character.prototypeId=mode==='auto'?automaticPrototype(Object.entries(character.visualFacts||{}).map(([field,value])=>({field,value})),character.gender||'female')?.id||'':mode==='candidate'?id:'';
     character.prototypeCustom=mode==='custom'?custom.trim():'';
+    character.prototypeCatalog=mode==='custom'&&catalog?.slug&&catalog?.name?{
+      slug:String(catalog.slug).slice(0,120),name:String(catalog.name).slice(0,120),series:String(catalog.series||'').slice(0,120),
+    }:null;
     this.save();this.onchange();
   }
   setLock(character,lock){character.lockHistory ||= [];character.lockHistory.push(clone(character.lock||null));character.lockHistory=character.lockHistory.slice(-5);character.lock=lock;this.save();}
@@ -298,6 +301,28 @@ export class Controller {
       this.setLock(c,{confirmedAt:Date.now(),traits:cast.fixed_facts.map(f=>`${f.field.replaceAll('_',' ')}: ${f.value}`).join('; '),facts:clone(cast.fixed_facts),profile:c.profile,strategy:c.prototypeId||c.prototypeCustom?'character-tag-plus-description':'description',prototypeTag:record.scene.prototypeTag||'',sourceImage:record.scene.cast.length===1?record.imageId:null});
     }
     this.save();return c.lock;
+  }
+  async saveAppearance(record,cast,imageUrl){
+    const character=this.scope().characters[cast.character_id];
+    if(!character)throw new Error('当前人物不存在');
+    if(character.lock)return {lock:this.toggleLock(record,cast),mediaId:null};
+    if(!cast.fixed_facts?.length)throw new Error('当前镜头没有可核实的固定外貌，不能保存空锁定');
+    let mediaId=null;
+    if(record.scene.cast.length===1){
+      this.adapter.syncOwnedFacts(character.profile,character.id,cast.fixed_facts);
+      mediaId=await this.adapter.saveAppearance(character.profile,cast.outfit_grounded?cast.outfit_ref:null,imageUrl,record.appearanceMediaId,{
+        owner:character.id,prototypeTag:record.scene.prototypeTag||'',
+        traits:cast.fixed_facts.map(f=>`${f.field.replaceAll('_',' ')}: ${f.value}`).join(', '),outfit:cast.outfit,
+      });
+      record.appearanceMediaId=mediaId;
+    }
+    const lock=this.toggleLock(record,cast);
+    if(mediaId){
+      lock.mediaId=mediaId;
+      lock.sourceImage=this.adapter.settings().configImageStorage?.[mediaId]?.path||lock.sourceImage;
+      this.save();await this.ctx().saveChat();
+    }
+    return {lock,mediaId,outfitSaved:!!(mediaId&&cast.outfit_grounded&&cast.outfit_ref)};
   }
   startRound(type,options,dryRun){
     if(dryRun||['quiet','impersonate'].includes(type))return;

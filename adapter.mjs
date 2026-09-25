@@ -210,6 +210,45 @@ export class ChatuAdapter {
     return id;
   }
   profile(id){return this.settings().characterPresets?.[id]||null;}
+  async saveAppearance(profileId,outfitId,imageUrl,existingId='',hints={}){
+    const settings=this.settings(),profile=this.profile(profileId);
+    if(!profile)throw new Error('智绘姬人物档案不存在，无法保存形象');
+    if(!imageUrl)throw new Error('图片尚未生成完成，暂不能保存到智绘姬');
+    const outfit=outfitId?settings.outfitPresets?.[outfitId]:null;
+    if(existingId&&profile.photoMedia?.some(item=>item.id===existingId)&&(!outfit||outfit.photoImageIds?.includes(existingId)))return existingId;
+    const url=new URL(imageUrl,location.href);
+    if(!['data:','blob:'].includes(url.protocol)&&url.origin!==location.origin)throw new Error('图片地址不是酒馆本地资源，停止保存');
+    const response=await fetch(url.href);
+    if(!response.ok)throw new Error(`读取已生成图片失败（HTTP ${response.status}）`);
+    const blob=await response.blob(),mimeType=blob.type.split(';')[0].toLowerCase();
+    if(!['image/png','image/jpeg','image/webp'].includes(mimeType)||blob.size<100||blob.size>25_000_000)throw new Error('图片格式或大小不适合保存到智绘姬');
+    const id=`cfgimg_${crypto.randomUUID()}`,format=mimeType.split('/')[1],fileName=`${id}.${format==='jpeg'?'jpg':format}`;
+    // Chatu reads configImageStorage before IndexedDB regardless of its current
+    // storage preference. Saving confirmed portraits there keeps phone and PC in sync.
+    const bytes=new Uint8Array(await blob.arrayBuffer());let binary='';
+    for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
+    const uploaded=await this.post('/api/images/upload',{image:btoa(binary),format,ch_name:'chatu8_config',filename:fileName});
+    if(typeof uploaded.path!=='string'||!uploaded.path.startsWith('/'))throw new Error('智绘姬服务器图片保存失败');
+    settings.configImageStorage ||= {};
+    settings.configImageStorage[id]={path:uploaded.path,date:Date.now(),kind:'image',mimeType,fileName,size:blob.size,storageFormat:format};
+    profile.photoMedia ||= [];
+    profile.photoImageIds ||= [];
+    if(!profile.photoMedia.some(item=>item.id===id))profile.photoMedia.push({id,kind:'image',mimeType,fileName,size:blob.size,description:'叙景确认形象'});
+    if(!profile.photoImageIds.includes(id))profile.photoImageIds.push(id);
+    profile.selectedPhotoId=id;profile.selectedPhotoIndex=profile.photoMedia.length-1;
+    if(profile.directorOwner===hints.owner&&!profile.photoPrompt){
+      profile.photoPrompt=[hints.prototypeTag,hints.traits].filter(Boolean).join(', ').slice(0,500);
+      profile.directorGeneratedPhotoPrompt=profile.photoPrompt;
+    }
+    if(outfit){
+      outfit.photoImageIds ||= [];
+      if(!outfit.photoImageIds.includes(id))outfit.photoImageIds.push(id);
+      outfit.selectedPhotoIndex=outfit.photoImageIds.length-1;
+      if(outfit.directorOwner===hints.owner&&!outfit.photoPrompt)outfit.photoPrompt=String(hints.outfit||'').slice(0,180);
+    }
+    this.context().saveSettingsDebounced();
+    return id;
+  }
   outfitsForProfile(profileId){
     const s=this.settings(),profile=s.characterPresets?.[profileId];
     return (profile?.outfits||[]).map(id=>({id,preset:s.outfitPresets?.[id]})).filter(x=>x.preset).map(({id,preset})=>({

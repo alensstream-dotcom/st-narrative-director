@@ -9,13 +9,13 @@ const BANK=[
   {id:'frieren',label:'Frieren',tag:'frieren, sousou no frieren',gender:'female',hair:'silver',eyes:'green',style:'long',feature:'elf'},
   {id:'emilia',label:'Emilia',tag:'emilia (re:zero), re:zero kara hajimeru isekai seikatsu',gender:'female',hair:'silver',eyes:'purple',style:'long',feature:'elf'},
   {id:'zero-two',label:'Zero Two',tag:'zero two (darling in the franxx), darling in the franxx',gender:'female',hair:'pink',eyes:'green',style:'long',feature:'horn'},
-  {id:'changli',label:'长离 · 鸣潮',tag:'changli_(wuthering_waves), wuthering_waves',gender:'female',hair:'pink',eyes:'gold',style:'long'},
-  {id:'jinhsi',label:'今汐 · 鸣潮',tag:'jinhsi_(wuthering_waves), wuthering_waves',gender:'female',hair:'silver',eyes:['white','gray'],style:'long'},
-  {id:'skadi',label:'斯卡蒂 · 明日方舟',tag:'skadi_(arknights), arknights',gender:'female',hair:'silver',eyes:'red',style:'long'},
-  {id:'amiya',label:'阿米娅 · 明日方舟',tag:'amiya_(arknights), arknights',gender:'female',hair:'brown',eyes:'blue',style:'long',feature:'rabbit'},
-  {id:'exusiai',label:'能天使 · 明日方舟',tag:'exusiai_(arknights), arknights',gender:'female',hair:'red',eyes:'gold',style:'short',feature:'halo'},
-  {id:'texas',label:'德克萨斯 · 明日方舟',tag:'texas_(arknights), arknights',gender:'female',hair:'black',eyes:'gold',style:'long',feature:'wolf'},
-  {id:'lappland',label:'拉普兰德 · 明日方舟',tag:'lappland_(arknights), arknights',gender:'female',hair:'silver',eyes:'gray',style:'long',feature:'wolf'}
+  {id:'changli',label:'长离 · 鸣潮',tag:'changli (wuthering waves), wuthering waves',gender:'female',hair:'pink',eyes:'gold',style:'long'},
+  {id:'jinhsi',label:'今汐 · 鸣潮',tag:'jinhsi (wuthering waves), wuthering waves',gender:'female',hair:'silver',eyes:['white','gray'],style:'long'},
+  {id:'skadi',label:'斯卡蒂 · 明日方舟',tag:'skadi (arknights), arknights',gender:'female',hair:'silver',eyes:'red',style:'long'},
+  {id:'amiya',label:'阿米娅 · 明日方舟',tag:'amiya (arknights), arknights',gender:'female',hair:'brown',eyes:'blue',style:'long',feature:'rabbit'},
+  {id:'exusiai',label:'能天使 · 明日方舟',tag:'exusiai (arknights), arknights',gender:'female',hair:'red',eyes:'gold',style:'short',feature:'halo'},
+  {id:'texas',label:'德克萨斯 · 明日方舟',tag:'texas (arknights), arknights',gender:'female',hair:'black',eyes:'gold',style:'long',feature:'wolf'},
+  {id:'lappland',label:'拉普兰德 · 明日方舟',tag:'lappland (arknights), arknights',gender:'female',hair:'silver',eyes:'gray',style:'long',feature:'wolf'}
 ];
 export const prototypeById=id=>BANK.find(p=>p.id===id)||null;
 const category=(value,kind)=>{

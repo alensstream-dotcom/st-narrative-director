@@ -41,17 +41,26 @@ export class UI {
     }catch(e){if(!abort.signal.aborted){info.textContent=e.message;body.append(command('rotate-right','重试分析',()=>{d.close();void this.previewChatu(selection);},'重试'));}}
   }
   error(e){this.c.status(String(e?.message||e));globalThis.toastr?.warning(String(e?.message||e),'叙景');}
-  lockDialog(record){
+  lockDialog(record,imageUrl=''){
     const {dialog:d,body}=dialog('人物形象');
+    const feedback=el('p',{class:'nd-status',role:'status'});
     for(const cast of record.scene.cast){
       const c=this.c.scope().characters[cast.character_id];if(!c)continue;
       const state=el('span',{text:c.lock?'固定外貌已锁定':'暂用形象，未锁定'});
-      const b=command(c.lock?'lock-open':'lock',c.lock?'解除锁定':'锁定固定外貌',()=>{
-        try{const lock=this.c.toggleLock(record,cast);state.textContent=lock?'固定外貌已锁定':'暂用形象，未锁定';b.title=lock?'解除锁定':'锁定固定外貌';}catch(e){this.error(e);}
+      const b=command(c.lock?'lock-open':'floppy-disk',c.lock?'解除锁定':'保存形象到智绘姬',async()=>{
+        b.disabled=true;
+        try{
+          const result=await this.c.saveAppearance(record,cast,imageUrl||record.imageId);
+          state.textContent=result.lock?'固定外貌已锁定':'暂用形象，未锁定';
+          b.title=result.lock?'解除锁定':'保存形象到智绘姬';
+          feedback.textContent=result.lock?result.mediaId
+            ?`已保存至智绘姬人物照片${result.outfitSaved?'及对应服装照片':''}，并锁定固定外貌。`
+            :'已锁定固定外貌；多人图不作为单人照片。':'已解除外貌锁定；智绘姬内已保存的照片保留。';
+        }catch(e){feedback.textContent=e.message;this.error(e);}finally{b.disabled=false;}
       });
       body.append(el('div',{class:'nd-character'},el('strong',{text:c.name}),state,b));
     }
-    body.append(el('p',{class:'nd-notice',text:'当前锁定固定外貌描述与所选人物 Tag，不锁服装与动作。此版本尚未验证人脸参考注入，不承诺换装后的脸部完全一致；多人图不会整张用作单人参考。'}),
+    body.append(feedback,el('p',{class:'nd-notice',text:'单人图确认后写入智绘姬人物照片；若当前剧情服装已建立预设，同一图也关联对应服装照片。固定外貌与人物 Tag 会锁定，换装和动作不会锁定。多人图只锁文字外貌，不作为单人参考。'}),
       command('palette','调整视觉原型',()=>{d.close();this.settings('characters');},'调整原型'),
       command('user','智绘姬角色管理',()=>this.c.adapter.openProfiles(),'角色管理'));
   }
@@ -69,7 +78,7 @@ export class UI {
           const section=el('figure',{class:'nd-image','data-nd-id':record.id},img,
             el('figcaption',{},el('span',{text:record.scene.moment}),command('sliders','提示词与重绘',()=>{
               const target=this.c.resolve(record.binding);if(target)void this.previewChatu({index:target.index,text:record.scene.anchor.quote,start:record.scene.anchor.start,end:record.scene.anchor.end},{binding:record.binding,scenes:[record.scene]});
-            }),command('user-lock','锁定形象',()=>this.lockDialog(record))));
+            }),command('user-lock','保存形象',()=>this.lockDialog(record,record.imageId))));
           insertAtAnchor(root,record.scene.anchor.quote,section);
         }finally{this.mounts.delete(record.id);}
       }
@@ -78,7 +87,7 @@ export class UI {
   renderLockAction(marker,record){
     if(!record.scene?.cast?.some(c=>c.character_id&&c.fixed_facts?.length))return;
     if(!marker.querySelector('.st-chatu8-image-span img')||marker.querySelector('.nd-tools'))return;
-    marker.append(el('div',{class:'nd-tools'},command('user-lock','确认并锁定人物外貌',()=>this.lockDialog(record))));
+    marker.append(el('div',{class:'nd-tools'},command('user-lock','保存形象到智绘姬',()=>this.lockDialog(record,marker.querySelector('.st-chatu8-image-span img')?.currentSrc||''))));
   }
   async renderPrompts(){
     const context=this.c.ctx(),chat=context.chat;

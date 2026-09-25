@@ -1,5 +1,6 @@
 import {el,command,dialog} from './dom.mjs';
 import {prototypeSearchUrl,prototypeById} from './prototypes.mjs';
+import {loadCharacterCatalog,searchCharacterCatalog} from './catalog.mjs';
 import {connectionPanel} from './connection-ui.mjs';
 
 const field=(name,input)=>{input.setAttribute('aria-label',name);return el('label',{},name,input);};
@@ -76,12 +77,13 @@ function characterPanel(ui,body,d){
     const prototype=el('select',{},el('option',{value:'auto',text:`自动匹配${automatic?` · ${automatic.label}`:candidates.length>1?' · 多个相似候选，请手选':' · 暂无可靠候选'}`}),el('option',{value:'none',text:'仅使用固定外貌描述'}),...candidates.map(p=>el('option',{value:`candidate:${p.id}`,text:p.label})),el('option',{value:'custom',text:'自定义角色 Tag'}));
     prototype.value=character.prototypeMode==='candidate'?`candidate:${character.prototypeId}`:character.prototypeMode||'auto';
     if(!prototype.value)prototype.value='auto';
-    const custom=el('input',{value:character.prototypeCustom||'',placeholder:'例如 violet evergarden',maxlength:100});
+    const custom=el('input',{value:character.prototypeCustom||'',placeholder:'例如 violet evergarden',maxlength:180});
     const customField=field('自定义 Anima 角色 Tag',custom);customField.hidden=prototype.value!=='custom';
     const tagPreview=el('small',{class:'nd-hint'});
     const showTag=()=>{
       const tag=prototype.value==='auto'?automatic?.tag:prototype.value.startsWith('candidate:')?prototypeById(prototype.value.slice('candidate:'.length))?.tag:prototype.value==='custom'?custom.value.trim():'';
-      tagPreview.textContent=tag?`Anima 角色外貌参考：${tag}。当前剧情服装、动作仍以正文为准。`:'没有可靠角色 Tag 时，仅使用已知固定外貌描述。';
+      const source=prototype.value==='custom'&&character.prototypeCatalog?` · ANIMADEX：${character.prototypeCatalog.name}`:'';
+      tagPreview.textContent=tag?`Anima 角色外貌参考：${tag}${source}。当前剧情服装、动作仍以正文为准。`:'没有可靠角色 Tag 时，仅使用已知固定外貌描述。';
     };
     prototype.disabled=!!character.lock;custom.disabled=!!character.lock;
     prototype.onchange=()=>{customField.hidden=prototype.value!=='custom';showTag();if(prototype.value==='custom')return;try{const [mode,id]=prototype.value.split(':');c.setPrototype(character.id,mode,id);status.textContent='视觉原型已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
@@ -89,6 +91,36 @@ function characterPanel(ui,body,d){
     custom.onchange=()=>{try{c.setPrototype(character.id,'custom','',custom.value);status.textContent='自定义角色 Tag 已更新，仅影响后续新图和重绘';}catch(e){status.textContent=e.message;}};
     showTag();
     section.append(field('Anima 视觉原型',prototype),customField,tagPreview,el('div',{class:'nd-actions-inline'},el('a',{href:prototypeSearchUrl(character),target:'_blank',rel:'noopener noreferrer',text:'按当前外观筛选 ANIMADEX'})),el('small',{text:character.lock?'已锁定；先解除锁定才能换原型':'自动匹配需要足够固定外貌证据；有多个相似候选时手动选择'}));
+    const catalogSearch=el('input',{type:'search',placeholder:'搜索角色或作品，例如 长离 / 鸣潮 / arknights',spellcheck:false});
+    const catalogStatus=el('p',{class:'nd-hint',role:'status',text:'按外貌推荐，或搜索 ANIMADEX 角色与作品。'});
+    const catalogResults=el('div',{class:'nd-catalog-results'});
+    const catalogPanel=el('details',{class:'nd-catalog'},el('summary',{text:'搜索 ANIMADEX 全部角色 Tag（3.6 万）'}),
+      field('角色或作品',catalogSearch),catalogStatus,catalogResults);
+    let catalogRows;
+    const search=async()=>{
+      catalogStatus.textContent='正在读取角色目录…';
+      try{
+        catalogRows ||= await loadCharacterCatalog();
+        if(!catalogPanel.isConnected)return;
+        const found=searchCharacterCatalog(catalogRows,{query:catalogSearch.value,facts:character.visualFacts,gender:character.gender});
+        catalogStatus.textContent=`找到 ${found.total} 个候选；显示前 ${found.results.length} 个。选择后仅用于此人物的后续新图。`;
+        catalogResults.replaceChildren(...found.results.map(item=>{
+          const apply=command('check',`使用 ${item.name} 的角色 Tag`,()=>{
+            try{
+              c.setPrototype(character.id,'custom','',item.trigger,{slug:item.slug,name:item.name,series:item.series});
+              prototype.value='custom';custom.value=item.trigger;customField.hidden=false;showTag();
+              status.textContent=`已选用 ${item.name} 的 Anima 触发串；当前服装仍取自剧情。`;
+            }catch(error){status.textContent=error.message;}
+          },'使用此 Tag');
+          apply.disabled=!!character.lock;
+          return el('div',{class:'nd-catalog-row'},el('strong',{text:`${item.name} · ${item.series}`}),
+            el('small',{text:`外貌匹配 ${item.matched}/${found.expected} · ${item.trigger}`}),apply);
+        }));
+      }catch(error){catalogStatus.textContent=`角色目录读取失败：${error.message}；仍可打开网站查找并手填 Tag。`;}
+    };
+    catalogPanel.ontoggle=()=>{if(catalogPanel.open)void search();};
+    catalogSearch.oninput=()=>{if(catalogRows)void search();};
+    section.append(catalogPanel);
     const outfits=c.adapter.outfitsForProfile(character.profile),wardrobe=el('details',{},el('summary',{text:`智绘姬服装预设 ${outfits.length}`}));
     for(const outfit of outfits)wardrobe.append(el('div',{class:'nd-profile-row'},el('strong',{text:outfit.nameCN||outfit.nameEN||outfit.id}),el('small',{text:outfit.description||'未填写服装描述'})));
     section.append(wardrobe);
