@@ -36,8 +36,16 @@ export class Controller {
     const prompt=assertEnglish(positive),{startTag,endTag}=this.adapter.imageTags();
     if(prompt.includes(startTag)||prompt.includes(endTag)||/[<>]/.test(prompt)||!/^Scene Composition:safe\s*,[^;]+;$/.test(prompt))throw new Error('请保留 Scene Composition:safe, 开头和末尾分号，每条只描述一个普通剧情画面');
     const meta=this.meta(target.message);
-    const duplicate=meta.prompts.find(p=>p.binding?.swipe===binding.swipe&&p.anchor?.fingerprint===scene.anchor.fingerprint&&p.prompt===prompt&&p.state!=='failed');
-    if(duplicate){this.status('这张画面已经提交，可在原文的智绘姬按钮查看或重试');return duplicate;}
+    const duplicate=meta.prompts.find(p=>p.binding?.swipe===binding.swipe&&p.anchor?.fingerprint===scene.anchor.fingerprint&&p.prompt===prompt&&this.resolve(p.binding)&&validAnchor(target.message.mes,p.anchor));
+    if(duplicate){
+      const regenerate=duplicate.state==='done',previous={state:duplicate.state,detail:duplicate.detail};
+      duplicate.state='issued';duplicate.detail='';
+      try{await this.ctx().saveChat();}catch(error){Object.assign(duplicate,previous);throw error;}
+      if(!this.resolve(binding))throw new Error('聊天已切换；重试请求已保存在原聊天，未在新聊天触发生图');
+      this.onPromptIssued?.(duplicate,regenerate);
+      this.status(regenerate?'已重新交给智绘姬生成这张画面':'已重新交给智绘姬识别这张画面');
+      return duplicate;
+    }
     const record={id:uuid(),binding:clone(binding),anchor:clone(scene.anchor),scene:clone(scene),prompt,origin:'manual',state:'issued',created:Date.now()};
     meta.prompts.push(record);
     try{await this.ctx().saveChat();}catch(error){meta.prompts=meta.prompts.filter(p=>p!==record);throw error;}

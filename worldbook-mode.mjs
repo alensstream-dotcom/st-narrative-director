@@ -5,6 +5,35 @@ Return one scene, or at most three choices for genuinely different moments in th
 This tool is limited to non-explicit illustrations: no sexual acts, exposed intimate anatomy, sexualized minors, sexual violence or fetish imagery. Do not convert explicit activity into image-generation tags. If no supported non-explicit moment is present, return {"scenes":[]}.
 Positive must begin with the Anima safety tag safe, use only grounded tags (usually 6-20) plus a short relation sentence, and stay below 180 words. No image### marker, Scene Composition label, semicolon, resolution, renderer style or negative-prompt field. No explanations or reasoning traces.`;
 
+function parseScenesResponse(response){
+  const raw=String(response||'').trim();
+  if(raw.length>100000)throw new Error('主 API 的画面结果过长，请缩短选段后重试');
+  const fenced=[...raw.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)].map(x=>x[1]);
+  for(const candidate of [raw,...fenced]){
+    try{const value=JSON.parse(candidate);if(Array.isArray(value?.scenes))return value;}catch{}
+  }
+  // Some main APIs prepend explanatory or reasoning text. Accept only a complete
+  // JSON object with a scenes array; quote/anchor checks still validate its data.
+  let inspected=0;
+  for(let start=raw.indexOf('{');start>=0&&inspected<128;start=raw.indexOf('{',start+1),inspected++){
+    let depth=0,quoted=false,escaped=false;
+    for(let end=start;end<raw.length;end++){
+      const char=raw[end];
+      if(quoted){
+        if(escaped)escaped=false;
+        else if(char==='\\')escaped=true;
+        else if(char==='"')quoted=false;
+      }else if(char==='"')quoted=true;
+      else if(char==='{')depth++;
+      else if(char==='}'&&--depth===0){
+        try{const value=JSON.parse(raw.slice(start,end+1));if(Array.isArray(value?.scenes))return value;}catch{}
+        break;
+      }
+    }
+  }
+  throw new Error('主 API 没有返回有效的画面列表；请保留选段后重试');
+}
+
 export async function analyzeMainSelection(controller,selection,signal,reference=''){
   const context=controller.ctx();
   if(typeof context.generateRaw!=='function')throw new Error('此酒馆版本未提供主 API 手动生成接口');
@@ -25,8 +54,7 @@ export async function analyzeMainSelection(controller,selection,signal,reference
     const response=await context.generateRaw({systemPrompt:MANUAL_SYSTEM,prompt:JSON.stringify(input),trimNames:false});
     if(signal?.aborted)throw new DOMException('已取消使用本次结果','AbortError');
     if(epoch!==controller.epoch||!controller.resolve(binding))throw new Error('分析期间聊天或原文已改变，请重新选择');
-    const parsed=JSON.parse(String(response).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));
-    if(!Array.isArray(parsed.scenes))throw new Error('主 API 没有返回有效的画面列表；可以保留选段后重试');
+    const parsed=parseScenesResponse(response);
     const scenes=parsed.scenes.slice(0,3).map(item=>{
       const anchor=locateQuote(raw,item.evidence,selection.start,selection.end);
       locateQuote(raw,anchor.quote); // The DOM insertion must also be unambiguous.

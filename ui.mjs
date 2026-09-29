@@ -4,8 +4,8 @@ import {analyzeMainSelection,inspectNativeMarkers} from './worldbook-mode.mjs';
 
 export class UI {
   constructor(controller){
-    this.c=controller;this.pendingActivation=new Set();this.timer=null;this.toolbar=null;this.selection=null;
-    this.c.onPromptIssued=record=>this.pendingActivation.add(record.id);
+    this.c=controller;this.pendingActivation=new Map();this.timer=null;this.toolbar=null;this.selection=null;
+    this.c.onPromptIssued=(record,regenerate=false)=>this.pendingActivation.set(record.id,regenerate);
   }
   error(error){this.c.status(String(error?.message||error));globalThis.toastr?.warning(String(error?.message||error),'叙景');}
   clearSelection(){this.toolbar?.remove();this.toolbar=null;this.selection=null;}
@@ -87,39 +87,62 @@ export class UI {
       for(const record of message.extra?.[NS]?.prompts||[]){
         const target=this.c.resolve(record.binding),anchor=target?.anchor||record.anchor;
         if(!target||!anchor||!validAnchor(message.mes,anchor)){
-          root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();continue;
+          root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();
+          if(this.pendingActivation.has(record.id)){
+            this.pendingActivation.delete(record.id);
+            this.errorOnce(new Error('聊天、回复分支或原文已改变，未触发这次补图'));
+          }
+          continue;
         }
-        if(root.querySelector(`[data-nd-id="${record.id}"]`))continue;
+        const existingMarker=root.querySelector(`[data-nd-id="${record.id}"]`);
+        if(existingMarker){
+          await this.activateIfPending(ctx,existingMarker,root,record);
+          continue;
+        }
         const requestId=this.c.adapter.requestId(record.prompt);
         const existingButton=[...root.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
         if(existingButton){
-          if(this.pendingActivation.delete(record.id)&&String(ctx.extensionSettings['st-chatu8']?.zidongdianji)!=='true')this.clickManualButtonWhenReady(root,record);
+          await this.activateIfPending(ctx,existingButton,root,record);
           continue;
         }
         const {startTag,endTag}=this.c.adapter.imageTags();
         const marker=el('span',{class:'nd-chatu-prompt','data-nd-id':record.id},`${startTag}${record.prompt}${endTag}`);
         if(!insertAtAnchor(root,anchor.quote,marker)){
-          if(this.pendingActivation.delete(record.id))this.errorOnce(new Error('提示词已保存，但当前页面无法唯一定位原句；请展开正文后重新打开本条消息'));
+          if(this.pendingActivation.has(record.id)){
+            this.pendingActivation.delete(record.id);
+            this.errorOnce(new Error('提示词已保存，但当前页面无法唯一定位原句；请展开正文后重新打开本条消息'));
+          }
           continue;
         }
-        delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;
-        if(this.pendingActivation.delete(record.id)){
-          root.scrollIntoView({block:'center'});
-          await ctx.eventSource.emit('js_generation_ended');
-          if(String(ctx.extensionSettings['st-chatu8']?.zidongdianji)!=='true')this.clickManualButtonWhenReady(root,record);
-        }
+        await this.activateIfPending(ctx,marker,root,record);
       }
     }
   }
-  clickManualButtonWhenReady(root,record){
+  async activateIfPending(ctx,focus,root,record){
+    if(!this.pendingActivation.has(record.id))return;
+    const regenerate=this.pendingActivation.get(record.id);
+    this.pendingActivation.delete(record.id);
+    await this.activateChatuPrompt(ctx,focus,root,record,regenerate);
+  }
+  async activateChatuPrompt(ctx,focus,root,record,regenerate=false){
+    const requestId=this.c.adapter.requestId(record.prompt);
+    const hadImage=[...root.querySelectorAll('.st-chatu8-image-span')].some(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
+    focus.scrollIntoView({block:'center'});
+    delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;
+    await ctx.eventSource.emit('js_generation_ended');
+    const nativeAuto=String(ctx.extensionSettings['st-chatu8']?.zidongdianji)==='true';
+    if(!nativeAuto||regenerate&&hadImage)this.clickManualButtonWhenReady(record,regenerate);
+  }
+  clickManualButtonWhenReady(record,regenerate=false){
     const requestId=this.c.adapter.requestId(record.prompt);
     let attempts=0;
     const check=()=>{
-      if(!root.isConnected||!this.c.resolve(record.binding))return;
-      const button=[...root.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
+      const target=this.c.resolve(record.binding);if(!target)return;
+      const liveRoot=document.querySelector(`.mes[mesid="${target.index}"] .mes_text`);
+      const button=liveRoot&&[...liveRoot.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
       if(button){
-        const saved=[...root.querySelectorAll('.st-chatu8-image-span')].find(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
-        if(!saved&&!button.hasAttribute('data-loading'))button.click();
+        const saved=[...liveRoot.querySelectorAll('.st-chatu8-image-span')].find(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
+        if((regenerate||!saved)&&!button.hasAttribute('data-loading'))button.click();
         return;
       }
       if(++attempts<40)setTimeout(check,250);
@@ -152,8 +175,8 @@ export class UI {
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6.1');
-    const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v2.json',import.meta.url).href,download:'Anima-Story-Safe-v2.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
+    const {body}=dialog('叙景 · 世界书助手 0.6.2');
+    const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v3.json',import.meta.url).href,download:'Anima-Story-Safe-v3.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
       link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
       el('p',{text:'人物、服装和剧情沿用已有数据库总结。自动插图直接使用主 API 已收到的资料；手动补图可粘贴相关摘要，插件不维护重复记忆。'}),
