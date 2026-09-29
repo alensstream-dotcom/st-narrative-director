@@ -1,153 +1,161 @@
-import {NS,assertEnglish,validAnchor,narrative} from './core.mjs';
+import {NS,assertEnglish,validAnchor,narrative,locateQuote} from './core.mjs';
 import {el,command,dialog,selectionSnapshot,insertAtAnchor} from './dom.mjs';
-import {openSettings} from './settings.mjs';
+import {analyzeMainSelection,inspectNativeMarkers} from './worldbook-mode.mjs';
 
 export class UI {
-  constructor(controller){this.c=controller;this.toolbar=null;this.selection=null;this.mounts=new Set();this.pendingActivation=new Set();this.c.onPromptIssued=record=>this.pendingActivation.add(record.id);this.timer=null;this.statusNode=null;this.taskList=null;}
-  async previewChatu(selection,previous=null){
+  constructor(controller){
+    this.c=controller;this.pendingActivation=new Set();this.timer=null;this.toolbar=null;this.selection=null;
+    this.c.onPromptIssued=record=>this.pendingActivation.add(record.id);
+  }
+  error(error){this.c.status(String(error?.message||error));globalThis.toastr?.warning(String(error?.message||error),'叙景');}
+  clearSelection(){this.toolbar?.remove();this.toolbar=null;this.selection=null;}
+  async previewChatu(selection,reference=''){
     const {dialog:d,body}=dialog('确认画面'),abort=new AbortController();
     d.addEventListener('close',()=>abort.abort(),{once:true});
-    const info=el('p',{class:'nd-status',text:'正在分析选中剧情…',role:'status'});body.append(info);
+    const info=el('p',{class:'nd-status',role:'status',text:'正在使用酒馆主 API 分析选段。关闭窗口会丢弃结果，已发出的请求仍会完成。'});body.append(info);
     try{
-      const raw=this.c.ctx().chat[selection.index]?.mes;
-      if(!raw||raw.slice(selection.start,selection.end)!==selection.text)throw new Error('选中的剧情已改变，请重新选择');
-      const result=previous||await this.c.analyze(selection.index,raw,selection.start,selection.end,true,abort.signal);
+      const result=await analyzeMainSelection(this.c,selection,abort.signal,reference);
       if(abort.signal.aborted)return;
-      if(!result.scenes.length)throw new Error('未找到有原文依据的可绘制画面');
-      let sceneIndex=0,scene=result.scenes[0];
-      const quote=el('blockquote',{text:narrative(scene.anchor.quote).trim()});
-      const prompt=el('textarea',{rows:6,'aria-label':'英文生图提示词'});
-      const fill=()=>{
-        scene=result.scenes[sceneIndex];
-        quote.textContent=narrative(scene.anchor.quote).trim();
-        prompt.value=this.c.effective(scene,this.c.adapter.promptStyle()).positive;
-        info.textContent=scene.moment;
-      };
+      if(!result.scenes.length)throw new Error('选段中未找到可绘制的普通、非露骨剧情画面');
+      let scene=result.scenes[0];
+      const quote=el('blockquote'),prompt=el('textarea',{rows:7,'aria-label':'英文生图提示词'});
+      const size=el('select',{'aria-label':'画面比例'},
+        el('option',{value:'1024x1536',text:'竖图 2:3'}),el('option',{value:'1536x1024',text:'横图 3:2'}),el('option',{value:'1024x1024',text:'方图 1:1'}));
+      const fill=()=>{quote.textContent=narrative(scene.anchor.quote).trim();prompt.value=scene.positive;info.textContent=scene.moment;};
       if(result.scenes.length>1){
-        const moments=el('select',{},...result.scenes.map((s,i)=>el('option',{value:String(i),text:s.moment})));
-        moments.onchange=()=>{sceneIndex=Number(moments.value);fill();};
-        body.append(el('label',{},'画面',moments));
+        const moments=el('select',{'aria-label':'选择画面'},...result.scenes.map((s,i)=>el('option',{value:String(i),text:s.moment})));
+        moments.onchange=()=>{scene=result.scenes[Number(moments.value)];fill();};body.append(moments);
       }
-      const confirm=command('image','交给智绘姬生成',async()=>{
-        confirm.disabled=true;
+      const submit=command('image','交给智绘姬生成',async()=>{
+        submit.disabled=true;
         try{
-          const positive=assertEnglish(prompt.value);
-          await this.c.issuePrompt(this.c.bind(selection.index,raw,scene.anchor.end),scene,'manual',positive);
-          d.close();this.refresh();
-        }catch(e){this.error(e);confirm.disabled=false;}
-      },'交给智绘姬生成');confirm.classList.add('nd-primary');
-      fill();body.append(quote,el('label',{},'英文提示词',prompt),
-        el('div',{class:'nd-actions'},command('rotate-right','重新分析',()=>{d.close();void this.previewChatu(selection);}),confirm));
-    }catch(e){if(!abort.signal.aborted){info.textContent=e.message;body.append(command('rotate-right','重试分析',()=>{d.close();void this.previewChatu(selection);},'重试'));}}
+          let positive=assertEnglish(prompt.value).replace(/,\s*(?:1024x1536|1536x1024|1024x1024)\s*;$/,';');
+          if(!positive.endsWith(';'))throw new Error('提示词末尾需要保留分号');
+          positive=positive.slice(0,-1)+', '+size.value+';';
+          await this.c.issuePrompt(result.binding,scene,positive);d.close();this.refresh();
+        }catch(e){this.error(e);submit.disabled=false;}
+      },'交给智绘姬生成');submit.classList.add('nd-primary');
+      fill();body.append(quote,el('label',{},'英文提示词',prompt),el('label',{},'建议画面比例（智绘姬启用自主分辨率时生效）',size),
+        el('div',{class:'nd-actions'},command('rotate-right','重新选择',()=>{d.close();this.pickExcerpt(selection.index,selection,reference);},'返回选段'),submit));
+    }catch(error){if(!abort.signal.aborted){info.textContent=error.message;body.append(command('arrow-left','返回选段',()=>{d.close();this.pickExcerpt(selection.index,selection,reference);},'返回选段'));}}
   }
-  error(e){this.c.status(String(e?.message||e));globalThis.toastr?.warning(String(e?.message||e),'叙景');}
-  lockDialog(record,imageUrl=''){
-    const {dialog:d,body}=dialog('人物形象');
-    const feedback=el('p',{class:'nd-status',role:'status'});
-    for(const cast of record.scene.cast){
-      const c=this.c.scope().characters[cast.character_id];if(!c)continue;
-      const state=el('span',{text:c.lock?'固定外貌已锁定':'暂用形象，未锁定'});
-      const b=command(c.lock?'lock-open':'floppy-disk',c.lock?'解除锁定':'保存形象到智绘姬',async()=>{
-        b.disabled=true;
-        try{
-          const result=await this.c.saveAppearance(record,cast,imageUrl||record.imageId);
-          state.textContent=result.lock?'固定外貌已锁定':'暂用形象，未锁定';
-          b.title=result.lock?'解除锁定':'保存形象到智绘姬';
-          feedback.textContent=result.lock?result.mediaId
-            ?`已保存至智绘姬人物照片${result.outfitSaved?'及对应服装照片':''}，并锁定固定外貌。`
-            :'已锁定固定外貌；多人图不作为单人照片。':'已解除外貌锁定；智绘姬内已保存的照片保留。';
-        }catch(e){feedback.textContent=e.message;this.error(e);}finally{b.disabled=false;}
-      });
-      body.append(el('div',{class:'nd-character'},el('strong',{text:c.name}),state,b));
-    }
-    body.append(feedback,el('p',{class:'nd-notice',text:'单人图确认后写入智绘姬人物照片；若当前剧情服装已建立预设，同一图也关联对应服装照片。固定外貌与人物 Tag 会锁定，换装和动作不会锁定。多人图只锁文字外貌，不作为单人参考。'}),
-      command('palette','调整视觉原型',()=>{d.close();this.settings('characters');},'调整原型'),
-      command('user','智绘姬角色管理',()=>this.c.adapter.openProfiles(),'角色管理'));
+  pickExcerpt(index,selection=null,reference=''){
+    const message=this.c.ctx().chat[index];if(!message||message.is_user||message.is_system)return;
+    const raw=message.mes,epoch=this.c.epoch,clean=narrative(raw),{dialog:d,body}=dialog('选择要补图的剧情');
+    const parts=[...clean.matchAll(/\S[\s\S]*?(?=\n\s*\n|$)/g)].filter(p=>p[0].trim().length>=4);
+    const choices=el('select',{'aria-label':'剧情段落'},...parts.map((p,i)=>el('option',{value:String(i),text:`${i+1}. ${p[0].trim().replace(/\s+/g,' ').slice(0,80)}`})));
+    const quote=el('textarea',{rows:7,'aria-label':'补图原文',value:selection?.text||parts[0]?.[0].trim()||''});
+    choices.onchange=()=>{selection=null;quote.value=parts[Number(choices.value)]?.[0].trim()||'';};
+    const memory=el('textarea',{rows:4,'aria-label':'当时的人物服装资料',placeholder:'可选：粘贴数据库总结中的相关外貌、当时衣着及来源楼层。只使用选段时已经成立的资料。',value:reference});
+    const status=el('p',{class:'nd-status',role:'status'});
+    const submit=command('image','分析选段并预览',()=>{
+      try{
+        if(epoch!==this.c.epoch||this.c.ctx().chat[index]!==message||message.mes!==raw)throw new Error('聊天或原文已改变，请重新打开选段');
+        const part=parts[Number(choices.value)],same=part&&quote.value===part[0].trim();
+        const existing=selection&&selection.text===quote.value?selection:null;
+        const anchor=locateQuote(raw,quote.value,existing?.start??(same?part.index:0),existing?.end??(same?part.index+part[0].length:raw.length));
+        if(memory.value.length>12000)throw new Error('补充资料最多 12000 字符，请只保留相关记录');
+        this.c.adapter.imageTags();
+        d.close();void this.previewChatu({index,text:anchor.quote,start:anchor.start,end:anchor.end},memory.value);
+      }catch(error){status.textContent=error.message;}
+    },'分析选段并预览');submit.classList.add('nd-primary');
+    body.append(el('p',{text:'先选原文，再预览提示词。支持普通、非露骨剧情；不改变正文模型、推理强度或回复长度。'}),
+      choices,quote,el('label',{},'当时的人物与服装资料（可选）',memory),
+      el('p',{class:'nd-notice',text:'补图会带上本段之前的近期正文与当前角色卡，不自动读取未确认的数据库插件，也不保存另一份人物档案。旧段落请勿使用后文的最新衣着。'}),status,submit);
   }
-  imageViewer(record){const {body}=dialog('画面');body.append(el('img',{src:record.imageId,alt:record.scene.moment,class:'nd-full-image'}),el('p',{text:record.scene.moment}));}
-  async renderImages(){
-    const chat=this.c.ctx().chat;
-    for(let index=0;index<chat.length;index++){
-      const m=chat[index],root=document.querySelector(`.mes[mesid="${index}"] .mes_text`);if(!root)continue;
-      for(const record of m.extra?.[NS]?.images||[]){
-        if(!this.c.resolve(record.binding)||!validAnchor(m.mes,record.scene.anchor)){root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();continue;}
-        if(root.querySelector(`[data-nd-id="${record.id}"]`)||this.mounts.has(record.id))continue;
-        this.mounts.add(record.id);
-        try{
-          const img=el('img',{src:record.imageId,alt:record.scene.moment,loading:'lazy',onclick:()=>this.imageViewer(record)});
-          const section=el('figure',{class:'nd-image','data-nd-id':record.id},img,
-            el('figcaption',{},el('span',{text:record.scene.moment}),command('sliders','提示词与重绘',()=>{
-              const target=this.c.resolve(record.binding);if(target)void this.previewChatu({index:target.index,text:record.scene.anchor.quote,start:record.scene.anchor.start,end:record.scene.anchor.end},{binding:record.binding,scenes:[record.scene]});
-            }),command('user-lock','保存形象',()=>this.lockDialog(record,record.imageId))));
-          insertAtAnchor(root,record.scene.anchor.quote,section);
-        }finally{this.mounts.delete(record.id);}
+  renderImages(){
+    for(const [index,message] of this.c.ctx().chat.entries()){
+      const root=document.querySelector(`.mes[mesid="${index}"] .mes_text`);if(!root)continue;
+      for(const record of message.extra?.[NS]?.images||[]){
+        if(!this.c.resolve(record.binding)||!record.scene?.anchor||!validAnchor(message.mes,record.scene.anchor)){
+          root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();continue;
+        }
+        if(root.querySelector(`[data-nd-id="${record.id}"]`))continue;
+        // Preserve display of legacy saved images without reviving old generators.
+        const image=el('img',{src:record.imageId,alt:record.scene.moment||'剧情插图',loading:'lazy'});
+        insertAtAnchor(root,record.scene.anchor.quote,el('figure',{class:'nd-image','data-nd-id':record.id},image));
       }
     }
-  }
-  renderLockAction(marker,record){
-    if(!record.scene?.cast?.some(c=>c.character_id&&c.fixed_facts?.length))return;
-    if(!marker.querySelector('.st-chatu8-image-span img')||marker.querySelector('.nd-tools'))return;
-    marker.append(el('div',{class:'nd-tools'},command('user-lock','保存形象到智绘姬',()=>this.lockDialog(record,marker.querySelector('.st-chatu8-image-span img')?.currentSrc||''))));
   }
   async renderPrompts(){
-    const context=this.c.ctx(),chat=context.chat;
-    for(let index=0;index<chat.length;index++){
-      const message=chat[index],root=document.querySelector(`.mes[mesid="${index}"] .mes_text`);
-      if(!root)continue;
+    const ctx=this.c.ctx();
+    for(const [index,message] of ctx.chat.entries()){
+      const root=document.querySelector(`.mes[mesid="${index}"] .mes_text`);if(!root)continue;
       for(const record of message.extra?.[NS]?.prompts||[]){
-        const target=this.c.resolve(record.binding);
-        if(target?.anchor&&(target.anchor.start!==record.anchor.start||target.anchor.end!==record.anchor.end)){
-          record.anchor=target.anchor;
-          void context.saveChat();
+        const target=this.c.resolve(record.binding),anchor=target?.anchor||record.anchor;
+        if(!target||!anchor||!validAnchor(message.mes,anchor)){
+          root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();continue;
         }
-        if(!target||!validAnchor(message.mes,record.anchor)){
-          root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();
-          continue;
-        }
-        const existing=root.querySelector(`[data-nd-id="${record.id}"]`);
-        if(existing){this.renderLockAction(existing,record);continue;}
+        if(root.querySelector(`[data-nd-id="${record.id}"]`))continue;
         const {startTag,endTag}=this.c.adapter.imageTags();
         const marker=el('span',{class:'nd-chatu-prompt','data-nd-id':record.id},`${startTag}${record.prompt}${endTag}`);
-        if(!insertAtAnchor(root,record.anchor.quote,marker))continue;
-        delete root.dataset.chatu8Processed;
-        delete root.dataset.chatu8ContentLength;
-        if(this.pendingActivation.delete(record.id)){
-          void context.eventSource.emit('js_generation_ended').catch(e=>this.error(e));
+        if(!insertAtAnchor(root,anchor.quote,marker)){
+          if(this.pendingActivation.delete(record.id))this.errorOnce(new Error('提示词已保存，但当前页面无法唯一定位原句；请展开正文后重新打开本条消息'));
+          continue;
         }
+        delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;
+        if(this.pendingActivation.delete(record.id))await ctx.eventSource.emit('js_generation_ended');
       }
     }
+  }
+  renderTools(){
+    const ctx=this.c.ctx();let tags=null;
+    try{tags=this.c.adapter.imageTags();}catch{}
+    for(const root of document.querySelectorAll('#chat .mes[mesid] .mes_text')){
+      const row=root.closest('.mes'),index=Number(row.getAttribute('mesid')),message=ctx.chat[index];
+      if(!message||message.is_user||message.is_system||!narrative(message.mes).trim()){row.querySelector('.nd-worldbook-tools')?.remove();continue;}
+      const counts=inspectNativeMarkers(message.mes);
+      const mismatch=tags&&(tags.startTag!=='image###'||tags.endTag!=='###')&&counts.complete>0;
+      const manual=(message.extra?.[NS]?.prompts||[]).filter(r=>this.c.resolve(r.binding)).length;
+      const images=root.querySelectorAll('.st-chatu8-image-span img,.nd-image img').length;
+      const busy=index===ctx.chat.length-1&&this.c.generating;
+      const state=!tags?'尚未检测到智绘姬配置':busy?'正文生成中':mismatch?'正文与智绘姬的图片标记不一致':counts.dangling||counts.malformed?'图片指令不完整或格式异常':counts.declared!==null&&counts.declared!==counts.complete?'声明图数与完整指令数不一致':!counts.complete&&!manual?counts.reason==='no-safe-visible-scene'?'本条无通用插图画面':counts.reason==='no-visual-scene'?'本条没有可见画面':'本条没有生图指令':`正文指令 ${counts.complete} · 手动 ${manual} · 已显示 ${images} 张`;
+      const signature=JSON.stringify([index,state,counts,manual,images]);
+      let bar=row.querySelector('.nd-worldbook-tools');if(bar?.dataset.signature===signature)continue;
+      if(!bar){bar=el('div',{class:'nd-tools nd-worldbook-tools'});root.after(bar);}bar.dataset.signature=signature;
+      bar.replaceChildren(el('small',{text:state}),command('image','选段补图',()=>this.pickExcerpt(index),'选段补图'),
+        command('circle-info','本条生图诊断',()=>{
+          const {body}=dialog('本条生图诊断');
+          body.append(el('p',{text:`完整图片标记：${counts.complete}；格式异常：${counts.malformed}；缺少结束标记：${counts.dangling}；手动记录：${manual}；页面已显示图片：${images}。`}),
+            el('p',{text:'没有指令时检查世界书是否启用或用选段补图。有指令却没有图时，查看智绘姬生成按钮、自动点击设置及错误。世界书无法保证生成端成功。'}),
+            el('p',{text:this.c.lastWorldbookActivation===undefined?'当前页面尚无世界书激活记录。':`最近的世界书激活事件中，通用版核心${this.c.lastWorldbookActivation?'已出现':'未出现'}。这不代表历史消息，也不能证明最终 API 请求包含它。`}));
+        }));
+    }
+  }
+  settings(){
+    const {body}=dialog('叙景 · 世界书助手 0.6');
+    const link=el('a',{href:new URL('./worldbooks/Anima-Story-SFW-v1.json',import.meta.url).href,download:'Anima-Story-SFW-v1.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
+    body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
+      link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。'}),
+      el('p',{text:'人物、服装和剧情沿用已有数据库总结。自动插图直接使用主 API 已收到的资料；手动补图可粘贴相关摘要，插件不维护重复记忆。'}),
+      el('p',{text:'旧自动导演、独立 API / 模型设置、原型库、服装写回和工作流控制已经移除。你原有的智绘姬设置、人物照片和聊天内容保留。'}),
+      el('p',{class:'nd-notice',text:'本版按要求未运行测试、模型调用或真实生图；手机表现和实际出图等待你的反馈。'}));
   }
   refresh(){
-    if(this.statusNode?.isConnected)this.statusNode.textContent=this.c.notice;
-    if(this.taskList?.isConnected){
-      this.taskList.replaceChildren();
-      const records=this.c.ctx().chat.flatMap(m=>m.extra?.[NS]?.prompts||[]).slice(-30).reverse();
-      for(const record of records){
-        const button=[...document.querySelectorAll('.image-tag-button')].find(node=>node.dataset.requestId===this.c.adapter.requestId(record.prompt));
-        const state=record.state==='done'?'完成':record.state==='failed'?`失败 · ${record.detail||'请在原文按钮重试'}`:button?.hasAttribute('data-loading')?'智绘姬生成中':'已交付智绘姬';
-        const row=el('div',{class:'nd-task'},el('span',{text:record.scene?.moment||'剧情画面'}),el('small',{text:state}));
-        if(button)row.append(command('arrow-up-right-from-square','定位到正文',()=>{this.taskList.closest('dialog')?.close();button.scrollIntoView({behavior:'smooth',block:'center'});button.focus();}));
-        this.taskList.append(row);
-      }
-    }
-    if(!this.timer)this.timer=setTimeout(async()=>{
+    if(this.timer)return;
+    this.timer=setTimeout(async()=>{
       this.timer=null;
-      try{await this.renderImages();await this.renderPrompts();}catch(e){this.error(e);}
-    },160);
+      try{this.renderImages();await this.renderPrompts();}catch(error){this.errorOnce(error);}
+      try{this.renderTools();}catch(error){this.errorOnce(error);}
+    },180);
   }
-  settings(tab){return openSettings(this,tab);}
+  errorOnce(error){const text=String(error?.message||error);if(text!==this.lastError){this.lastError=text;globalThis.toastr?.warning(text,'叙景');}}
   install(){
-    const entry=el('div',{class:'nd-settings-entry'},command('clapperboard','叙景 · 剧情导演',()=>this.settings(),'叙景 · 剧情导演'));
-    (document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings')||document.body).append(entry);
+    (document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings')||document.body).append(
+      el('div',{class:'nd-settings-entry'},command('images','叙景 · 世界书助手',()=>this.settings(),'叙景 · 世界书助手')));
     document.addEventListener('selectionchange',()=>{
       const next=selectionSnapshot(this.c.ctx());if(!next)return;this.selection=next;
-      if(!this.toolbar){const generate=command('image','生成图片',()=>{
-        const selected=this.selection;this.toolbar?.remove();this.toolbar=null;if(selected)void this.previewChatu(selected);
-      },'生成图片');generate.classList.add('nd-primary');this.toolbar=el('div',{class:'nd-selection'},generate);document.body.append(this.toolbar);}
-      const v=window.visualViewport;this.toolbar.style.left=`${Math.max(8,Math.min(next.rect.left,(v?.width||innerWidth)-150))}px`;
+      if(!this.toolbar){
+        this.toolbar=el('div',{class:'nd-selection'},command('image','选段补图',()=>{
+          const selected=this.selection;this.clearSelection();if(selected)this.pickExcerpt(selected.index,selected);
+        },'选段补图'));document.body.append(this.toolbar);
+      }
+      const v=window.visualViewport;
+      this.toolbar.style.left=`${Math.max(8,Math.min(next.rect.left,(v?.width||innerWidth)-150))}px`;
       this.toolbar.style.top=`${Math.max(8,Math.min(next.rect.bottom+10,(v?.height||innerHeight)-64))}px`;
     });
-    document.addEventListener('pointerdown',e=>{if(this.toolbar&&!this.toolbar.contains(e.target)&&!e.target.closest('.mes_text')){this.toolbar.remove();this.toolbar=null;this.selection=null;}});
-    const chat=document.querySelector('#chat');if(chat)new MutationObserver(()=>this.refresh()).observe(chat,{childList:true,subtree:true});this.refresh();
+    document.addEventListener('pointerdown',event=>{if(this.toolbar&&!this.toolbar.contains(event.target)&&!event.target.closest('.mes_text'))this.clearSelection();});
+    const chat=document.querySelector('#chat');if(chat)new MutationObserver(()=>this.refresh()).observe(chat,{childList:true,subtree:true});
+    this.refresh();
   }
 }

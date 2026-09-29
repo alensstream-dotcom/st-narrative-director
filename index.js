@@ -2,17 +2,17 @@ import {Controller} from './controller.mjs';
 import {UI} from './ui.mjs';
 
 function init(){
+  if(!globalThis.SillyTavern?.getContext)return;
   const c=new Controller(()=>SillyTavern.getContext()),ui=new UI(c);c.onchange=()=>ui.refresh();ui.install();
-  const context=c.ctx(),events=context.eventSource,types=context.eventTypes||context.event_types;
-  events.on(types.GENERATION_STARTED,(...args)=>c.startRound(...args));
-  events.on(types.STREAM_TOKEN_RECEIVED,text=>c.onToken(text));
-  events.on(types.GENERATION_ENDED,()=>{c.endRound();ui.refresh();});
-  events.on('generate-image-response',result=>{c.onChatuResult(result);ui.refresh();});
-  if(types.WORLD_INFO_ACTIVATED)events.on(types.WORLD_INFO_ACTIVATED,entries=>{
-    c.activeLore=(Array.isArray(entries)?entries:[]).slice(0,8).map(e=>({title:e.comment||'',keys:e.key||[],content:String(e.content||'').slice(0,1000)}));
+  const ctx=c.ctx(),events=ctx.eventSource,types=ctx.eventTypes||ctx.event_types||{};
+  const on=(name,fn)=>{if(types[name])events.on(types[name],fn);};
+  on('GENERATION_STARTED',(_type,_options,dryRun)=>{if(!dryRun){c.generating=true;ui.refresh();}});
+  for(const name of ['GENERATION_ENDED','GENERATION_STOPPED'])on(name,()=>{c.generating=false;ui.refresh();});
+  events.on('generate-image-response',result=>c.onChatuResult(result));
+  on('WORLD_INFO_ACTIVATED',entries=>{c.lastWorldbookActivation=(Array.isArray(entries)?entries:[]).some(e=>String(e.content||'').includes('ANIMA_STORY_SFW_V1'));});
+  for(const name of ['CHAT_CHANGED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_EDITED'])on(name,()=>{
+    c.invalidate();ui.clearSelection();if(name==='CHAT_CHANGED')c.lastWorldbookActivation=undefined;
   });
-  for(const name of ['CHAT_CHANGED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_EDITED'])if(types[name])events.on(types[name],()=>{c.invalidate();ui.toolbar?.remove();ui.toolbar=null;ui.selection=null;});
-  for(const name of ['CHARACTER_MESSAGE_RENDERED','MESSAGE_UPDATED','MESSAGE_RECEIVED'])if(types[name])events.on(types[name],()=>ui.refresh());
-  globalThis[Symbol.for('st.narrative-director.debug.v1')]={controller:c,ui};
+  for(const name of ['CHARACTER_MESSAGE_RENDERED','MESSAGE_UPDATED','MESSAGE_RECEIVED'])on(name,()=>ui.refresh());
 }
-if(globalThis.SillyTavern?.getContext)init();else document.addEventListener('DOMContentLoaded',init,{once:true});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
