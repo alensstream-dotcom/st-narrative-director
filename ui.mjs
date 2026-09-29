@@ -133,7 +133,7 @@ export class UI {
     if(!previousButton){delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;}
     await ctx.eventSource.emit('js_generation_ended');
     const nativeAuto=String(ctx.extensionSettings['st-chatu8']?.zidongdianji)==='true';
-    this.clickManualButtonWhenReady(record,regenerate,nativeAuto&&!wasAutoHandled&&!hadImage);
+    this.clickManualButtonWhenReady(record,regenerate||hadImage,nativeAuto&&!wasAutoHandled&&!hadImage);
   }
   clickManualButtonWhenReady(record,regenerate=false,skipIfNewAuto=false){
     const requestId=this.c.adapter.requestId(record.prompt);
@@ -149,7 +149,12 @@ export class UI {
         return;
       }
       if(++attempts<40)setTimeout(check,250);
-      else this.errorOnce(new Error('智绘姬未识别选段的图片标记；请检查标记配置，或点击正文里出现的生图按钮'));
+      else{
+        record.state='failed';record.detail='智绘姬未识别这条选段图片标记';
+        Promise.resolve().then(()=>this.c.ctx().saveChat()).catch(()=>{});
+        this.errorOnce(new Error('智绘姬未识别选段的图片标记；请检查标记配置，或再次提交同一画面'));
+        this.refresh();
+      }
     };
     setTimeout(check,250);
   }
@@ -161,27 +166,30 @@ export class UI {
       if(!message||message.is_user||message.is_system||!narrative(message.mes).trim()){row.querySelector('.nd-worldbook-tools')?.remove();continue;}
       const counts=inspectNativeMarkers(message.mes);
       const mismatch=tags&&(tags.startTag!=='image###'||tags.endTag!=='###')&&counts.complete>0;
-      const manual=(message.extra?.[NS]?.prompts||[]).filter(r=>this.c.resolve(r.binding)).length;
+      const manualRecords=(message.extra?.[NS]?.prompts||[]).filter(r=>this.c.resolve(r.binding));
+      const manual=manualRecords.length,failedManual=manualRecords.filter(r=>r.state==='failed').length;
       const images=root.querySelectorAll('.st-chatu8-image-span img,.nd-image img').length;
       const busy=index===ctx.chat.length-1&&this.c.generating;
-      const state=!tags?'尚未检测到智绘姬配置':busy?'正文生成中':mismatch?'正文与智绘姬的图片标记不一致':counts.dangling||counts.malformed?'图片指令不完整或格式异常':counts.declared!==null&&counts.declared!==counts.complete?'声明图数与完整指令数不一致':!counts.complete&&!manual?counts.reason==='no-safe-visible-scene'?'本条无通用插图画面':counts.reason==='no-visual-scene'?'本条没有可见画面':'本条没有生图指令':`正文指令 ${counts.complete} · 手动 ${manual} · 已显示 ${images} 张`;
+      const state=!tags?'尚未检测到智绘姬配置':busy?'正文生成中':mismatch?'正文与智绘姬的图片标记不一致':counts.dangling||counts.malformed?'图片指令不完整或格式异常':failedManual?`手动补图失败 ${failedManual} 张，点击诊断查看`:counts.declared!==null&&counts.declared!==counts.complete?'声明图数与完整指令数不一致':!counts.complete&&!manual?counts.reason==='no-safe-visible-scene'?'本条无通用插图画面':counts.reason==='no-visual-scene'?'本条没有可见画面':'本条没有生图指令':`正文指令 ${counts.complete} · 手动 ${manual} · 已显示 ${images} 张`;
       const signature=JSON.stringify([index,state,counts,manual,images]);
       let bar=row.querySelector('.nd-worldbook-tools');if(bar?.dataset.signature===signature)continue;
       if(!bar){bar=el('div',{class:'nd-tools nd-worldbook-tools'});root.after(bar);}bar.dataset.signature=signature;
       bar.replaceChildren(el('small',{text:state}),command('image','选段补图',()=>this.pickExcerpt(index),'选段补图'),
         command('circle-info','本条生图诊断',()=>{
           const {body}=dialog('本条生图诊断');
-          body.append(el('p',{text:`完整图片标记：${counts.complete}；格式异常：${counts.malformed}；缺少结束标记：${counts.dangling}；手动记录：${manual}；页面已显示图片：${images}。`}),
+          body.append(el('p',{text:`完整图片标记：${counts.complete}；格式异常：${counts.malformed}；缺少结束标记：${counts.dangling}；手动记录：${manual}（失败 ${failedManual}）；页面已显示图片：${images}。`}),
+            ...(failedManual?[el('p',{text:`最近的手动失败：${manualRecords.filter(r=>r.state==='failed').at(-1)?.detail||'未收到具体错误'}。再次提交相同画面可重试。`})]:[]),
             el('p',{text:'没有指令时检查世界书是否启用或用选段补图。有指令却没有图时，查看智绘姬生成按钮、自动点击设置及错误。世界书无法保证生成端成功。'}),
             el('p',{text:this.c.lastWorldbookActivation===undefined?'当前页面尚无世界书激活记录。':`最近的世界书激活事件中，通用版核心${this.c.lastWorldbookActivation?'已出现':'未出现'}。这不代表历史消息，也不能证明最终 API 请求包含它。`}));
         }));
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6.3');
+    const {body}=dialog('叙景 · 世界书助手 0.6.4');
     const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v3.json',import.meta.url).href,download:'Anima-Story-Safe-v3.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
+    const tags=el('a',{href:'https://animadex.net/',target:'_blank',rel:'noopener noreferrer',class:'nd-command',text:'查询 Anima 角色 Tag'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
-      link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
+      link,tags,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
       el('p',{text:'人物、服装和剧情沿用已有数据库总结。自动插图直接使用主 API 已收到的资料；手动补图可粘贴相关摘要，插件不维护重复记忆。'}),
       el('p',{text:'旧自动导演、独立 API / 模型设置、原型库、服装写回和工作流控制已经移除。你原有的智绘姬设置、人物照片和聊天内容保留。'}),
       el('p',{class:'nd-notice',text:'本版按要求未运行测试、模型调用或真实生图；手机表现和实际出图等待你的反馈。'}));

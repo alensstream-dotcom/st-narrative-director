@@ -33,7 +33,7 @@ export class Controller {
   async issuePrompt(binding,scene,positive){
     const target=this.resolve(binding);
     if(!target||!validAnchor(target.message.mes,scene.anchor))throw new Error('原文已改变，请重新选择剧情');
-    const prompt=assertEnglish(positive),{startTag,endTag}=this.adapter.imageTags();
+    const prompt=assertEnglish(positive).replace(/\s+/g,' '),{startTag,endTag}=this.adapter.imageTags();
     if(prompt.includes(startTag)||prompt.includes(endTag)||/[<>]/.test(prompt)||!/^Scene Composition:safe\s*,[^;]+;$/.test(prompt))throw new Error('请保留 Scene Composition:safe, 开头和末尾分号，每条只描述一个普通剧情画面');
     const meta=this.meta(target.message);
     const duplicate=meta.prompts.find(p=>p.binding?.swipe===binding.swipe&&p.anchor?.fingerprint===scene.anchor.fingerprint&&p.prompt===prompt&&this.resolve(p.binding)&&validAnchor(target.message.mes,p.anchor));

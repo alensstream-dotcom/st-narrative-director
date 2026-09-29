@@ -9,7 +9,8 @@ export class ChatuAdapter {
     return {startTag,endTag};
   }
   requestId(prompt){
-    let hash=0;for(let i=0;i<prompt.length;i++)hash=(hash<<5)-hash+prompt.charCodeAt(i)|0;
+    const normalized=String(prompt||'').trim().replaceAll('\r','').replaceAll('\n','');
+    let hash=0;for(let i=0;i<normalized.length;i++)hash=(hash<<5)-hash+normalized.charCodeAt(i)|0;
     return 'chatu8-id-'+Math.abs(hash).toString(36);
   }
 }

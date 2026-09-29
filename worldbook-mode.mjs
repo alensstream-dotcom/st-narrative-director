@@ -55,13 +55,18 @@ export async function analyzeMainSelection(controller,selection,signal,reference
     if(signal?.aborted)throw new DOMException('已取消使用本次结果','AbortError');
     if(epoch!==controller.epoch||!controller.resolve(binding))throw new Error('分析期间聊天或原文已改变，请重新选择');
     const parsed=parseScenesResponse(response);
-    const scenes=parsed.scenes.slice(0,3).map(item=>{
-      const anchor=locateQuote(raw,item.evidence,selection.start,selection.end);
-      locateQuote(raw,anchor.quote); // The DOM insertion must also be unambiguous.
-      const content=assertEnglish(item.positive);
-      if(!/^safe\s*,/i.test(content)||/[;#<>]/.test(content))throw new Error('主 API 返回了不符合 Anima 通用插图格式的提示词');
-      return {anchor,moment:String(item.title||anchor.quote).slice(0,180),positive:`Scene Composition:${content};`,negative:'text, watermark',cast:[],mainApiManual:true};
-    });
+    const scenes=[];let firstError=null;
+    for(const item of parsed.scenes.slice(0,6)){
+      try{
+        const anchor=locateQuote(raw,item.evidence,selection.start,selection.end);
+        locateQuote(raw,anchor.quote); // The DOM insertion must also be unambiguous.
+        const content=assertEnglish(item.positive).replace(/\s+/g,' ');
+        if(!/^safe\s*,/i.test(content)||/[;#<>]/.test(content))throw new Error('主 API 返回了不符合 Anima 通用插图格式的提示词');
+        scenes.push({anchor,moment:String(item.title||anchor.quote).slice(0,180),positive:`Scene Composition:${content};`,negative:'text, watermark',cast:[],mainApiManual:true});
+        if(scenes.length===3)break;
+      }catch(error){firstError||=error;}
+    }
+    if(parsed.scenes.length&&!scenes.length)throw firstError||new Error('主 API 没有给出可用的画面');
     return {binding,scenes};
   }finally{controller.mainManualBusy=false;}
 }
