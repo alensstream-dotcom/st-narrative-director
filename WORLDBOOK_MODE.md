@@ -15,6 +15,8 @@
 
 原书的触发概率都是 100%，没有证据把偶发漏图归咎于概率。常开条目仍受世界书预算影响；ignoreBudget 只绕过世界书分配预算，不能突破模型的总上下文长度。
 
+核对本机 SillyTavern 1.18.0 源码：`world-info.js` 的 `atDepth` 值为 4，深度 0、系统角色的条目会进入对应深度的提示词；`ignoreBudget` 只绕过世界书预算检查。`script.js` 的正文生成先发出 `GENERATION_STARTED`，再调用 `getWorldInfoPrompt`，因此插件在每次正文开始时重置激活诊断，避免沿用上一轮状态。手动补图调用 `generateRaw` 时不指定 `api`、`responseLength` 或推理参数；酒馆在 `api` 为空时使用当前 `main_api`，只有显式传入正数 `responseLength` 才临时覆盖回复长度。这些源码事实说明本插件没有主动调低正文推理强度，但不能证明服务端实际采用的强度。
+
 审阅的[智绘姬 3.1.2 源码](https://github.com/damoshen123/st-chatu8)中，Scene 解析器使用 `Scene Composition:([^;]+);`。通用版保留单行 `image###Scene Composition:…;###`，只在字段末尾使用分号；不修改智绘姬源码。后续版本若更改按钮 DOM 或解析规则，应重新核对本插件的交接方式。
 
 Anima 官方推荐的安全标签是 `safe`。正面词使用有依据的少量 Tag 和简短动作说明，不强制凑够固定数量。只使用资料中已经明确提供的角色与作品触发 Tag；外部 [AnimaDex](https://animadex.net/) 可供用户查证，但模型不能假称自己实时检索了角色目录。

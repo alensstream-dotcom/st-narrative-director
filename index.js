@@ -6,7 +6,7 @@ function init(){
   const c=new Controller(()=>SillyTavern.getContext()),ui=new UI(c);c.onchange=()=>ui.refresh();ui.install();
   const ctx=c.ctx(),events=ctx.eventSource,types=ctx.eventTypes||ctx.event_types||{};
   const on=(name,fn)=>{if(types[name])events.on(types[name],fn);};
-  on('GENERATION_STARTED',(_type,_options,dryRun)=>{if(!dryRun){c.generating=true;ui.refresh();}});
+  on('GENERATION_STARTED',(_type,_options,dryRun)=>{if(!dryRun){c.generating=true;c.lastWorldbookActivation=false;ui.refresh();}});
   for(const name of ['GENERATION_ENDED','GENERATION_STOPPED'])on(name,()=>{c.generating=false;ui.refresh();});
   events.on('generate-image-response',result=>c.onChatuResult(result));
   on('WORLD_INFO_ACTIVATED',entries=>{c.lastWorldbookActivation=(Array.isArray(entries)?entries:[]).some(e=>String(e.content||'').includes('ANIMA_STORY_SAFE_V3'));});

@@ -182,12 +182,12 @@ export class UI {
           body.append(el('p',{text:`完整图片标记：${counts.complete}；格式异常：${counts.malformed}；缺少结束标记：${counts.dangling}；手动记录：${manual}（失败 ${failedManual}）；页面已显示图片：${images}。`}),
             ...(failedManual?[el('p',{text:`最近的手动失败：${manualRecords.filter(r=>r.state==='failed').at(-1)?.detail||'未收到具体错误'}。再次提交相同画面可重试。`})]:[]),
             el('p',{text:`智绘姬主开关：${tags?'开':'未就绪'}；自动点击：${autoClick?'开':'关'}。没有指令时检查世界书是否启用或用选段补图；有指令却没有图时，查看智绘姬生成按钮与生成端错误。世界书无法保证生成端成功。`}),
-            el('p',{text:this.c.lastWorldbookActivation===undefined?'当前页面尚无世界书激活记录。':`最近的世界书激活事件中，通用版核心${this.c.lastWorldbookActivation?'已出现':'未出现'}。这不代表历史消息，也不能证明最终 API 请求包含它。`}));
+            el('p',{text:this.c.lastWorldbookActivation===undefined?'当前页面尚无新一轮正文生成记录。':`最近一次正文生成中，${this.c.lastWorldbookActivation?'记录到':'未记录到'}通用版核心激活。若仍使用原 V4.1，未记录到通用版核心属于预期；激活事件本身也不能证明最终 API 请求包含它。`}));
         }));
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6.5');
+    const {body}=dialog('叙景 · 世界书助手 0.6.6');
     const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v3.json',import.meta.url).href,download:'Anima-Story-Safe-v3.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
     const tags=el('a',{href:'https://animadex.net/?mode=characters',target:'_blank',rel:'noopener noreferrer',class:'nd-command',text:'查询 Anima 角色 Tag'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
