@@ -126,14 +126,16 @@ export class UI {
   }
   async activateChatuPrompt(ctx,focus,root,record,regenerate=false){
     const requestId=this.c.adapter.requestId(record.prompt);
+    const previousButton=[...root.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
+    const wasAutoHandled=previousButton?.dataset.autoClickHandled==='true';
     const hadImage=[...root.querySelectorAll('.st-chatu8-image-span')].some(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
     focus.scrollIntoView({block:'center'});
-    delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;
+    if(!previousButton){delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;}
     await ctx.eventSource.emit('js_generation_ended');
     const nativeAuto=String(ctx.extensionSettings['st-chatu8']?.zidongdianji)==='true';
-    if(!nativeAuto||regenerate&&hadImage)this.clickManualButtonWhenReady(record,regenerate);
+    this.clickManualButtonWhenReady(record,regenerate,nativeAuto&&!wasAutoHandled&&!hadImage);
   }
-  clickManualButtonWhenReady(record,regenerate=false){
+  clickManualButtonWhenReady(record,regenerate=false,skipIfNewAuto=false){
     const requestId=this.c.adapter.requestId(record.prompt);
     let attempts=0;
     const check=()=>{
@@ -141,6 +143,7 @@ export class UI {
       const liveRoot=document.querySelector(`.mes[mesid="${target.index}"] .mes_text`);
       const button=liveRoot&&[...liveRoot.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
       if(button){
+        if(skipIfNewAuto&&button.dataset.autoClickHandled==='true')return;
         const saved=[...liveRoot.querySelectorAll('.st-chatu8-image-span')].find(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
         if((regenerate||!saved)&&!button.hasAttribute('data-loading'))button.click();
         return;
@@ -175,7 +178,7 @@ export class UI {
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6.2');
+    const {body}=dialog('叙景 · 世界书助手 0.6.3');
     const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v3.json',import.meta.url).href,download:'Anima-Story-Safe-v3.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
       link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
