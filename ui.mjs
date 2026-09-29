@@ -21,7 +21,7 @@ export class UI {
       const quote=el('blockquote'),prompt=el('textarea',{rows:7,'aria-label':'英文生图提示词'});
       const size=el('select',{'aria-label':'画面比例'},
         el('option',{value:'576x960',text:'竖图 3:5'}),el('option',{value:'960x576',text:'横图 5:3'}),el('option',{value:'768x768',text:'方图 1:1'}));
-      const fill=()=>{quote.textContent=narrative(scene.anchor.quote).trim();prompt.value=scene.positive;info.textContent=scene.moment;};
+      const fill=()=>{quote.textContent=narrative(scene.anchor.quote).trim();prompt.value=scene.positive;size.value=scene.size||'576x960';info.textContent=scene.moment;};
       if(result.scenes.length>1){
         const moments=el('select',{'aria-label':'选择画面'},...result.scenes.map((s,i)=>el('option',{value:String(i),text:s.moment})));
         moments.onchange=()=>{scene=result.scenes[Number(moments.value)];fill();};body.append(moments);
@@ -64,6 +64,7 @@ export class UI {
     },'分析选段并预览');submit.classList.add('nd-primary');
     body.append(el('p',{text:'先选原文，再预览提示词。支持普通、非露骨剧情；不改变正文模型、推理强度或回复长度。'}),
       choices,quote,el('label',{},'当时的人物与服装资料（可选）',memory),
+      el('a',{href:'https://animadex.net/?mode=characters',target:'_blank',rel:'noopener noreferrer',class:'nd-command',text:'到 AnimaDex 查角色触发 Tag'}),
       el('p',{class:'nd-notice',text:'补图会带上本段之前的近期正文与当前角色卡，不自动读取未确认的数据库插件，也不保存另一份人物档案。旧段落请勿使用后文的最新衣着。'}),status,submit);
   }
   renderImages(){
@@ -159,8 +160,9 @@ export class UI {
     setTimeout(check,250);
   }
   renderTools(){
-    const ctx=this.c.ctx();let tags=null;
-    try{tags=this.c.adapter.imageTags();}catch{}
+    const ctx=this.c.ctx();let tags=null,tagError='';
+    try{tags=this.c.adapter.imageTags();}catch(error){tagError=String(error?.message||error);}
+    const autoClick=String(ctx.extensionSettings['st-chatu8']?.zidongdianji)==='true';
     for(const root of document.querySelectorAll('#chat .mes[mesid] .mes_text')){
       const row=root.closest('.mes'),index=Number(row.getAttribute('mesid')),message=ctx.chat[index];
       if(!message||message.is_user||message.is_system||!narrative(message.mes).trim()){row.querySelector('.nd-worldbook-tools')?.remove();continue;}
@@ -170,7 +172,7 @@ export class UI {
       const manual=manualRecords.length,failedManual=manualRecords.filter(r=>r.state==='failed').length;
       const images=root.querySelectorAll('.st-chatu8-image-span img,.nd-image img').length;
       const busy=index===ctx.chat.length-1&&this.c.generating;
-      const state=!tags?'尚未检测到智绘姬配置':busy?'正文生成中':mismatch?'正文与智绘姬的图片标记不一致':counts.dangling||counts.malformed?'图片指令不完整或格式异常':failedManual?`手动补图失败 ${failedManual} 张，点击诊断查看`:counts.declared!==null&&counts.declared!==counts.complete?'声明图数与完整指令数不一致':!counts.complete&&!manual?counts.reason==='no-safe-visible-scene'?'本条无通用插图画面':counts.reason==='no-visual-scene'?'本条没有可见画面':'本条没有生图指令':`正文指令 ${counts.complete} · 手动 ${manual} · 已显示 ${images} 张`;
+      const state=!tags?tagError||'尚未检测到智绘姬配置':busy?'正文生成中':mismatch?'正文与智绘姬的图片标记不一致':counts.dangling||counts.malformed?'图片指令不完整或格式异常':failedManual?`手动补图失败 ${failedManual} 张，点击诊断查看`:counts.declared!==null&&counts.declared!==counts.complete?'声明图数与完整指令数不一致':counts.complete&&!images&&!autoClick?'正文有图片指令；智绘姬自动点击未开启，请点生成按钮':!counts.complete&&!manual?counts.reason==='no-safe-visible-scene'?'本条无通用插图画面':counts.reason==='no-visual-scene'?'本条没有可见画面':'本条没有生图指令':`正文指令 ${counts.complete} · 手动 ${manual} · 已显示 ${images} 张`;
       const signature=JSON.stringify([index,state,counts,manual,images]);
       let bar=row.querySelector('.nd-worldbook-tools');if(bar?.dataset.signature===signature)continue;
       if(!bar){bar=el('div',{class:'nd-tools nd-worldbook-tools'});root.after(bar);}bar.dataset.signature=signature;
@@ -179,15 +181,15 @@ export class UI {
           const {body}=dialog('本条生图诊断');
           body.append(el('p',{text:`完整图片标记：${counts.complete}；格式异常：${counts.malformed}；缺少结束标记：${counts.dangling}；手动记录：${manual}（失败 ${failedManual}）；页面已显示图片：${images}。`}),
             ...(failedManual?[el('p',{text:`最近的手动失败：${manualRecords.filter(r=>r.state==='failed').at(-1)?.detail||'未收到具体错误'}。再次提交相同画面可重试。`})]:[]),
-            el('p',{text:'没有指令时检查世界书是否启用或用选段补图。有指令却没有图时，查看智绘姬生成按钮、自动点击设置及错误。世界书无法保证生成端成功。'}),
+            el('p',{text:`智绘姬主开关：${tags?'开':'未就绪'}；自动点击：${autoClick?'开':'关'}。没有指令时检查世界书是否启用或用选段补图；有指令却没有图时，查看智绘姬生成按钮与生成端错误。世界书无法保证生成端成功。`}),
             el('p',{text:this.c.lastWorldbookActivation===undefined?'当前页面尚无世界书激活记录。':`最近的世界书激活事件中，通用版核心${this.c.lastWorldbookActivation?'已出现':'未出现'}。这不代表历史消息，也不能证明最终 API 请求包含它。`}));
         }));
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6.4');
+    const {body}=dialog('叙景 · 世界书助手 0.6.5');
     const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v3.json',import.meta.url).href,download:'Anima-Story-Safe-v3.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
-    const tags=el('a',{href:'https://animadex.net/',target:'_blank',rel:'noopener noreferrer',class:'nd-command',text:'查询 Anima 角色 Tag'});
+    const tags=el('a',{href:'https://animadex.net/?mode=characters',target:'_blank',rel:'noopener noreferrer',class:'nd-command',text:'查询 Anima 角色 Tag'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
       link,tags,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
       el('p',{text:'人物、服装和剧情沿用已有数据库总结。自动插图直接使用主 API 已收到的资料；手动补图可粘贴相关摘要，插件不维护重复记忆。'}),
