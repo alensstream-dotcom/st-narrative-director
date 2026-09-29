@@ -34,7 +34,7 @@ export class Controller {
     const target=this.resolve(binding);
     if(!target||!validAnchor(target.message.mes,scene.anchor))throw new Error('原文已改变，请重新选择剧情');
     const prompt=assertEnglish(positive),{startTag,endTag}=this.adapter.imageTags();
-    if(prompt.includes(startTag)||prompt.includes(endTag)||/[<>]/.test(prompt)||!/^Scene Composition:SFW\s*,[^;]+;$/.test(prompt))throw new Error('请保留 Scene Composition:SFW, 开头和末尾分号，每条只描述一个普通剧情画面');
+    if(prompt.includes(startTag)||prompt.includes(endTag)||/[<>]/.test(prompt)||!/^Scene Composition:safe\s*,[^;]+;$/.test(prompt))throw new Error('请保留 Scene Composition:safe, 开头和末尾分号，每条只描述一个普通剧情画面');
     const meta=this.meta(target.message);
     const duplicate=meta.prompts.find(p=>p.binding?.swipe===binding.swipe&&p.anchor?.fingerprint===scene.anchor.fingerprint&&p.prompt===prompt&&p.state!=='failed');
     if(duplicate){this.status('这张画面已经提交，可在原文的智绘姬按钮查看或重试');return duplicate;}

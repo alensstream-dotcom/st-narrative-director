@@ -1,5 +1,5 @@
 import {NS,assertEnglish,validAnchor,narrative,locateQuote} from './core.mjs';
-import {el,command,dialog,selectionSnapshot,insertAtAnchor} from './dom.mjs';
+import {el,command,dialog,selectionSnapshot,insertAtAnchor,canInsertAtAnchor} from './dom.mjs';
 import {analyzeMainSelection,inspectNativeMarkers} from './worldbook-mode.mjs';
 
 export class UI {
@@ -20,7 +20,7 @@ export class UI {
       let scene=result.scenes[0];
       const quote=el('blockquote'),prompt=el('textarea',{rows:7,'aria-label':'英文生图提示词'});
       const size=el('select',{'aria-label':'画面比例'},
-        el('option',{value:'1024x1536',text:'竖图 2:3'}),el('option',{value:'1536x1024',text:'横图 3:2'}),el('option',{value:'1024x1024',text:'方图 1:1'}));
+        el('option',{value:'576x960',text:'竖图 3:5'}),el('option',{value:'960x576',text:'横图 5:3'}),el('option',{value:'768x768',text:'方图 1:1'}));
       const fill=()=>{quote.textContent=narrative(scene.anchor.quote).trim();prompt.value=scene.positive;info.textContent=scene.moment;};
       if(result.scenes.length>1){
         const moments=el('select',{'aria-label':'选择画面'},...result.scenes.map((s,i)=>el('option',{value:String(i),text:s.moment})));
@@ -29,9 +29,12 @@ export class UI {
       const submit=command('image','交给智绘姬生成',async()=>{
         submit.disabled=true;
         try{
-          let positive=assertEnglish(prompt.value).replace(/,\s*(?:1024x1536|1536x1024|1024x1024)\s*;$/,';');
+          let positive=assertEnglish(prompt.value).replace(/,\s*\d{2,4}x\d{2,4}\s*;$/,';');
           if(!positive.endsWith(';'))throw new Error('提示词末尾需要保留分号');
           positive=positive.slice(0,-1)+', '+size.value+';';
+          const target=this.c.resolve(result.binding),root=target&&document.querySelector(`.mes[mesid="${target.index}"] .mes_text`);
+          if(!canInsertAtAnchor(root,scene.anchor.quote))throw new Error('页面无法唯一定位这句原文，请改选更完整的句子后再提交');
+          root.scrollIntoView({block:'center'});
           await this.c.issuePrompt(result.binding,scene,positive);d.close();this.refresh();
         }catch(e){this.error(e);submit.disabled=false;}
       },'交给智绘姬生成');submit.classList.add('nd-primary');
@@ -87,6 +90,12 @@ export class UI {
           root.querySelector(`[data-nd-id="${record.id}"]`)?.remove();continue;
         }
         if(root.querySelector(`[data-nd-id="${record.id}"]`))continue;
+        const requestId=this.c.adapter.requestId(record.prompt);
+        const existingButton=[...root.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
+        if(existingButton){
+          if(this.pendingActivation.delete(record.id)&&String(ctx.extensionSettings['st-chatu8']?.zidongdianji)!=='true')this.clickManualButtonWhenReady(root,record);
+          continue;
+        }
         const {startTag,endTag}=this.c.adapter.imageTags();
         const marker=el('span',{class:'nd-chatu-prompt','data-nd-id':record.id},`${startTag}${record.prompt}${endTag}`);
         if(!insertAtAnchor(root,anchor.quote,marker)){
@@ -94,9 +103,29 @@ export class UI {
           continue;
         }
         delete root.dataset.chatu8Processed;delete root.dataset.chatu8ContentLength;
-        if(this.pendingActivation.delete(record.id))await ctx.eventSource.emit('js_generation_ended');
+        if(this.pendingActivation.delete(record.id)){
+          root.scrollIntoView({block:'center'});
+          await ctx.eventSource.emit('js_generation_ended');
+          if(String(ctx.extensionSettings['st-chatu8']?.zidongdianji)!=='true')this.clickManualButtonWhenReady(root,record);
+        }
       }
     }
+  }
+  clickManualButtonWhenReady(root,record){
+    const requestId=this.c.adapter.requestId(record.prompt);
+    let attempts=0;
+    const check=()=>{
+      if(!root.isConnected||!this.c.resolve(record.binding))return;
+      const button=[...root.querySelectorAll('.image-tag-button')].find(b=>b.dataset.requestId===requestId);
+      if(button){
+        const saved=[...root.querySelectorAll('.st-chatu8-image-span')].find(s=>s.dataset.requestId===requestId&&s.querySelector('img'));
+        if(!saved&&!button.hasAttribute('data-loading'))button.click();
+        return;
+      }
+      if(++attempts<40)setTimeout(check,250);
+      else this.errorOnce(new Error('智绘姬未识别选段的图片标记；请检查标记配置，或点击正文里出现的生图按钮'));
+    };
+    setTimeout(check,250);
   }
   renderTools(){
     const ctx=this.c.ctx();let tags=null;
@@ -123,10 +152,10 @@ export class UI {
     }
   }
   settings(){
-    const {body}=dialog('叙景 · 世界书助手 0.6');
-    const link=el('a',{href:new URL('./worldbooks/Anima-Story-SFW-v1.json',import.meta.url).href,download:'Anima-Story-SFW-v1.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
+    const {body}=dialog('叙景 · 世界书助手 0.6.1');
+    const link=el('a',{href:new URL('./worldbooks/Anima-Story-Safe-v2.json',import.meta.url).href,download:'Anima-Story-Safe-v2.json',class:'nd-command',text:'下载改进的通用剧情世界书'});
     body.append(el('p',{text:'自动插图由主 API 配合世界书输出，智绘姬负责生成。叙景只保留选段补图、提示词预览和漏图诊断。'}),
-      link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。'}),
+      link,el('p',{text:'导入世界书后，在当前角色或聊天中启用。请停用旧版 Anima 生图世界书，避免两套图片规则同时注入；原文件保留作备份。横图和方图要配合启用智绘姬 AI 自主分辨率及动态比例工作流。'}),
       el('p',{text:'人物、服装和剧情沿用已有数据库总结。自动插图直接使用主 API 已收到的资料；手动补图可粘贴相关摘要，插件不维护重复记忆。'}),
       el('p',{text:'旧自动导演、独立 API / 模型设置、原型库、服装写回和工作流控制已经移除。你原有的智绘姬设置、人物照片和聊天内容保留。'}),
       el('p',{class:'nd-notice',text:'本版按要求未运行测试、模型调用或真实生图；手机表现和实际出图等待你的反馈。'}));

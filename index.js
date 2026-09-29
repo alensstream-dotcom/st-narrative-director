@@ -9,7 +9,7 @@ function init(){
   on('GENERATION_STARTED',(_type,_options,dryRun)=>{if(!dryRun){c.generating=true;ui.refresh();}});
   for(const name of ['GENERATION_ENDED','GENERATION_STOPPED'])on(name,()=>{c.generating=false;ui.refresh();});
   events.on('generate-image-response',result=>c.onChatuResult(result));
-  on('WORLD_INFO_ACTIVATED',entries=>{c.lastWorldbookActivation=(Array.isArray(entries)?entries:[]).some(e=>String(e.content||'').includes('ANIMA_STORY_SFW_V1'));});
+  on('WORLD_INFO_ACTIVATED',entries=>{c.lastWorldbookActivation=(Array.isArray(entries)?entries:[]).some(e=>String(e.content||'').includes('ANIMA_STORY_SAFE_V2'));});
   for(const name of ['CHAT_CHANGED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_EDITED'])on(name,()=>{
     c.invalidate();ui.clearSelection();if(name==='CHAT_CHANGED')c.lastWorldbookActivation=undefined;
   });

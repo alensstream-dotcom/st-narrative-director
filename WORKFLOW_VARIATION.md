@@ -15,7 +15,7 @@
 正面固定词：
 
 ```text
-masterpiece, best quality, detailed illustration, <wlr:DogmaV6.1-000020:0.55:0.65>
+masterpiece, best quality, score_7, safe, detailed illustration, <wlr:DogmaV6.1-000020:0.55:0.65>
 ```
 
 负面固定词：
@@ -28,8 +28,10 @@ worst quality, low quality, bad anatomy, extra fingers, watermark, logo, text, s
 
 如果觉得美感损失明显，可以只把 Dogma 调回 `0.7:0.8`；若人脸仍然过于相似，再试 `0.45:0.55`。每次只改一组设置，比较同一人物提示词与同一种子，才能判断哪项设置起作用。世界书本身也会优先使用人物已有的独特发型、瞳色、眼型、脸部轮廓或标记，同一角色跨图保持这些词一致。不要为制造差异而乱加数据库没有记录的五官。
 
-## 工作流文件
+## 工作流文件与比例
 
-已另存到下载目录：`C:\Users\LZ339\Downloads\anima30s酒馆-人物多样-轻重绘.json`。它只把第二轮 KSampler（节点 14）的去噪从 `0.3` 调到 `0.2`，其余节点、模型、Turbo LoRA、Euler、sgm_uniform 与智绘姬占位符保持原样。旧文件仍可随时导回。
+最终建议导入下载目录中的 `C:\Users\LZ339\Downloads\anima30s-dynamic-aspect-light-redraw.json`。它从你提供的原版另存：初始画布（节点 6）改为 `%width%`、`%height%`，节点 12 改为 ComfyUI 自带 `ImageScaleBy`、等比例 1.5 倍，第二轮 KSampler（节点 14）去噪从 `0.3` 降到 `0.2`。底模、Turbo LoRA、WeiLin 提示词节点和原有采样器设置保持原样；你提供的工作流文件未改动。之前的“人物多样-轻重绘”文件只有去噪调整，仍固定竖图，留作备份即可。
 
-这个工作流调整只能减少第二轮重绘造成的人脸漂移，不能替代固定正面词的修改。两份修改建议一起使用，且不要求改正文主 API 的模型、推理强度或回复长度。
+在智绘姬中启用“AI 自主分辨率”；世界书给出 `576x960` 竖图、`960x576` 横图或 `768x768` 方图。若继续用原工作流，即使指令里写了横图或方图，节点 6 与 12 的固定尺寸仍会输出竖图。动态版本改变比例的依据来自智绘姬对 `%width%`/`%height%` 的替换代码和 ComfyUI 标准节点定义；尚未实际跑图验证。
+
+降低第二轮去噪只能减少该阶段对面部的改写，不能单独解决同脸。固定正面词与工作流修改需同时使用，且不要求改正文主 API 的模型、推理强度或回复长度。

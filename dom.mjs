@@ -34,14 +34,7 @@ export function selectionSnapshot(context) {
   return {index,text:raw.slice(from,to),start:from,end:to,rect:range.getBoundingClientRect()};
 }
 export function insertAtAnchor(root, quote, element) {
-  const nodes=textNodes(root); const chars=[]; const refs=[];
-  for(const node of nodes) for(let i=0;i<node.textContent.length;i++) {
-    const c=node.textContent[i]; if(!/[\s*_`]/.test(c)) {chars.push(c);refs.push({node,offset:i+1});}
-  }
-  const text=chars.join(''); const needle=normalize(narrative(quote)).replace(/[*_`]/g,'');
-  const at=text.indexOf(needle);
-  if(at<0 || text.indexOf(needle,at+1)>=0) return false;
-  const end=refs[at+needle.length-1]; if(!end) return false;
+  const end=findAnchorEnd(root,quote);if(!end)return false;
   const block=end.node.parentElement.closest('p,li,blockquote,h1,h2,h3,h4,div');
   if(block && block!==root && root.contains(block)) {
     const tail=document.createRange();tail.selectNodeContents(block);tail.setStart(end.node,end.offset);
@@ -52,6 +45,17 @@ export function insertAtAnchor(root, quote, element) {
   }
   else { const range=document.createRange();range.setStart(end.node,end.offset);range.collapse(true);range.insertNode(element); }
   return true;
+}
+export const canInsertAtAnchor=(root,quote)=>Boolean(root&&findAnchorEnd(root,quote));
+function findAnchorEnd(root, quote) {
+  const nodes=textNodes(root); const chars=[]; const refs=[];
+  for(const node of nodes) for(let i=0;i<node.textContent.length;i++) {
+    const c=node.textContent[i]; if(!/[\s*_`]/.test(c)) {chars.push(c);refs.push({node,offset:i+1});}
+  }
+  const text=chars.join(''); const needle=normalize(narrative(quote)).replace(/[*_`]/g,'');
+  const at=text.indexOf(needle);
+  if(at<0 || text.indexOf(needle,at+1)>=0) return null;
+  return refs[at+needle.length-1]||null;
 }
 export function el(tag, attrs={}, ...children) {
   const node=document.createElement(tag);
